@@ -99,6 +99,7 @@
   default-directory
   buffer-name)
 
+(defalias 'c:$ 'compile-queue:$)
 (defmacro compile-queue:$ (queue-name &rest commands)
   "Small DSL for chaining commands on the compile-queue.
 Fully compatible with deferred.el's deferred:$
@@ -118,17 +119,17 @@ The deferred promise receives the output buffer as the argument once the executi
 
 Example:
 (compile-queue:$
-(shell "echo A")
-(deferred-shell "echo C")
-(shell "echo B"))
+(shell \"echo A\")
+(deferred-shell \"echo C\")
+(shell \"echo B\"))
 
 This example will end up displaying C because the command \"echo C\" is not scheduled until after \"echo A\" finishes execution
 whereas \"echo B\" is scheduled before \"echo B\" starts executing.
 
 Example:
 (compile-queue:$
-(shell "echo A")
-(deferred:nextc it (lambda (buffer) (set-buffer buffer) (message "%s" (s-trim (buffer-string))))))
+(shell \"echo A\")
+(deferred:nextc it (lambda (buffer) (set-buffer buffer) (message \"%s\" (s-trim (buffer-string))))))
 
 This example shows how compile-queue can be chained with deferred.el.
 "
@@ -140,8 +141,13 @@ This example shows how compile-queue can be chained with deferred.el.
                       (--map (compile-queue:$-command queue-var it)))))
   `(let* ((,queue-var
            (compile-queue--by-name ,(if queue-name-is-queue queue-name compile-queue-root-queue)))
-          (it nil))
-     ,@commands)))
+          (it
+           ;; Might be a better way of doing this, but need to check if it is lexically bound.
+           (ignore-errors it)))
+     (if (deferred-p it)
+         (progn
+           (deferred:nextc it (lambda () ,@commands)))
+       ,@commands))))
 
 (defvar compile-queue--converters
   '(compile-queue:$--deferred-shell-command
