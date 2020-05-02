@@ -146,7 +146,7 @@ This example shows how compile-queue can be chained with deferred.el.
            (ignore-errors it)))
      (if (deferred-p it)
          (progn
-           (deferred:nextc it (lambda () ,@commands)))
+           (deferred:nextc it (lambda (&rest arg) ,@commands)))
        ,@commands))))
 
 (defvar compile-queue--converters
@@ -176,7 +176,7 @@ This example shows how compile-queue can be chained with deferred.el.
 
 (defun compile-queue:$--deferred-shell-command (list)
   (when (memq (car list) '(deferred-shell !deferred))
-    (let* ((plist-end (1+ (--find-last-index (symbolp it) list)))
+    (let* ((plist-end (1+ (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it))) list)))
            (plist (-slice list 1 plist-end))
            (command-rest (-slice list plist-end)))
       (list
@@ -188,7 +188,7 @@ This example shows how compile-queue can be chained with deferred.el.
 
 (defun compile-queue:$--shell-command (list)
   (when (memq (car list) (list 'shell '!))
-    (let* ((plist-end (1+ (--find-last-index (symbolp it) list)))
+    (let* ((plist-end (+ 2 (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it))) list)))
            (plist (-slice list 1 plist-end))
            (command-rest (-slice list plist-end)))
       `(compile-queue-shell-command-create ,@plist
@@ -219,8 +219,8 @@ This example shows how compile-queue can be chained with deferred.el.
       (setq-local compile-queue--execution execution)
       (prog1 execution
         (setf (compile-queue-execution queue) execution)
-        (-some-> (compile-queue-command-before-start command)
-          (compile-queue--callback execution))
+        (-some--> (compile-queue-command-before-start command)
+          (funcall (compile-queue--callback execution) it))
         (let ((process (start-process-shell-command
                         (compile-queue-shell-command--name command)
                         (compile-queue-shell-command--buffer-name command)
@@ -301,7 +301,7 @@ This example shows how compile-queue can be chained with deferred.el.
 
 (defun compile-queue-shell-command--name (command)
   (or (compile-queue-shell-command-buffer-name command)
-      (-some--> (compile-queue-shell-command-name command) it)
+      (compile-queue-shell-command-name command)
       (concat (s-truncate 10 (compile-queue-shell-command-command command)))))
 
 (defun compile-queue-shell-command--init-buffer (command)
@@ -361,11 +361,12 @@ This example shows how compile-queue can be chained with deferred.el.
     (-some--> delegate (funcall it process status))
     (when-let ((queue (compile-queue-current process)))
       (let ((execution (-some-> queue compile-queue-execution)))
-        (-some-> execution
-          compile-queue-execution-promise
-          compile-queue-promise-command
-          compile-queue-command-after-complete
-          (compile-queue--callback execution))
+        (-some-->
+            (-some-> execution
+              compile-queue-execution-promise
+              compile-queue-promise-command
+              compile-queue-command-after-complete)
+          (funcall (compile-queue--callback execution) it))
         (-some--> execution
           (compile-queue-execution-promise it)
           (compile-queue-promise-deferred it)
