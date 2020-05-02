@@ -1,9 +1,34 @@
-;;; -*- lexical-binding: t -*-
+;;; compile-queue.el --- Org mode for runbooks -*- lexical-binding: t -*-
+
+;; Author: Tyler Dodge
+;; Version: 0.1
+;; Keywords: convenience, processes, terminals, files
+;; Package-Requires: ((emacs "25.1") (seq "2.3") (f "0.20.0") (s "1.12.0") (dash "2.17.0") (mustache "0.24") (ht "0.9"))
+;; URL: https://github.com/tyler-dodge/compile-queue
+;; Git-Repository: git://github.com/tyler-dodge/compile-queeue.git
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+;;;
+;;;
+;;; Commentary:
+;;; Code:
 
 (require 'uuid)
 (require 'dash)
 (require 'ht)
 (require 'cl-lib)
+(require 'deferred)
 
 (defgroup compile-queue nil
   "Customization Group for Compile Queue.")
