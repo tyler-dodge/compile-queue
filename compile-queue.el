@@ -176,7 +176,9 @@ This example shows how compile-queue can be chained with deferred.el.
 
 (defun compile-queue:$--deferred-shell-command (list)
   (when (memq (car list) '(deferred-shell !deferred))
-    (let* ((plist-end (1+ (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it))) list)))
+    (let* ((plist-end
+            (or (-some-> (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it))) list) 1+)
+                0))
            (plist (-slice list 1 plist-end))
            (command-rest (-slice list plist-end)))
       (list
@@ -185,10 +187,13 @@ This example shows how compile-queue can be chained with deferred.el.
        `(compile-queue-shell-command-create ,@plist
                                             :command
                                             (s-join " " (list ,@command-rest)))))))
-
 (defun compile-queue:$--shell-command (list)
   (when (memq (car list) (list 'shell '!))
-    (let* ((plist-end (+ 2 (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it))) list)))
+    (let* ((plist-end
+            (or
+             (-some-> (->> list (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it)))))
+               (-partial '+ 2))
+             1))
            (plist (-slice list 1 plist-end))
            (command-rest (-slice list plist-end)))
       `(compile-queue-shell-command-create ,@plist
@@ -281,7 +286,7 @@ This example shows how compile-queue can be chained with deferred.el.
           (set-window-buffer it new-buffer))
         (kill-buffer old-buffer))
       (set-buffer new-buffer)
-      (setq-local buffer-read-only t)
+      (compile-queue-mode)
       (unless (string= buffer-name (buffer-name))
         (rename-buffer buffer-name))
       (goto-char (point-max)))))
@@ -324,7 +329,6 @@ This example shows how compile-queue can be chained with deferred.el.
 
     (prog1 (current-buffer)
       (when directory (setq-local default-directory directory))
-      (compile-queue-view-mode 1)
       (goto-char (point-max)))))
 
 (defun compile-queue-shell-command--process-filter (process output)
@@ -373,8 +377,6 @@ This example shows how compile-queue can be chained with deferred.el.
           (deferred:callback it (get-buffer (compile-queue-execution--buffer-name execution)))))
       (compile-queue-execute queue))))
 
-(define-minor-mode compile-queue-view-mode "Mode for viewing the output of the current execution of a compile-queue" nil)
-
 (defun compile-queue--forward-change (beg end length)
   (when (eq compile-queue--execution (compile-queue-execution compile-queue))
     (if (< length 0)
@@ -395,5 +397,10 @@ This example shows how compile-queue can be chained with deferred.el.
       (goto-char beg)
       (let ((inhibit-read-only t))
         (insert text)))))
+
+(define-derived-mode compile-queue-mode fundamental-mode "Compile-Queue"
+  "Mode for mirroring the output of the current queue's execution's compile buffer."
+  :group 'compile-queue
+  (setq-local buffer-read-only t))
 
 (provide 'compile-queue)
