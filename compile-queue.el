@@ -31,6 +31,7 @@
 (require 'uuid)
 (require 'dash)
 (require 'ht)
+(require 'pcase)
 (require 'cl-lib)
 (require 'deferred)
 (require 's)
