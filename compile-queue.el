@@ -180,7 +180,7 @@ This example shows how compile-queue can be chained with deferred.el.
   (when (memq (car list) '(deferred-shell !deferred))
     (let* ((plist-end
             (or (-some-> (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it))) list) 1+)
-                0))
+                1))
            (plist (-slice list 1 plist-end))
            (command-rest (-slice list plist-end)))
       (list
@@ -189,15 +189,16 @@ This example shows how compile-queue can be chained with deferred.el.
        `(compile-queue-shell-command-create ,@plist
                                             :command
                                             (s-join " " (list ,@command-rest)))))))
+
 (defun compile-queue:$--shell-command (list)
   (when (memq (car list) (list 'shell '!))
     (-let* ((plist-end
-            (or
-             (-some-> (->> list (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it)))))
-               (-partial '+ 2)))
-            1)
-           (plist (-slice list 1 plist-end))
-           (command-rest (-slice list plist-end)))
+             (or
+              (-some--> (->> list (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it)))))
+                (+ it 2))
+              1))
+            (plist (-slice list 1 plist-end))
+            (command-rest (-slice list plist-end)))
       `(compile-queue-shell-command-create ,@plist
                                            :command
                                            (s-join " " (list ,@command-rest))))))
