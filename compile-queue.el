@@ -3,7 +3,7 @@
 ;; Author: Tyler Dodge
 ;; Version: 0.1
 ;; Keywords: convenience, processes, terminals, files
-;; Package-Requires: ((emacs "25.1"))
+;; Package-Requires: ((emacs "26.2"))
 ;; URL: https://github.com/tyler-dodge/compile-queue
 ;; Git-Repository: git://github.com/tyler-dodge/compile-queeue.git
 ;; This program is free software; you can redistribute it and/or modify
