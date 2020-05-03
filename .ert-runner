@@ -1,0 +1,2 @@
+-l test/compile-queue-test.el
+--reporter dot

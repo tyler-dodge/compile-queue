@@ -3,7 +3,7 @@
 ;; Author: Tyler Dodge
 ;; Version: 0.1
 ;; Keywords: convenience, processes, terminals, files
-;; Package-Requires: ((emacs "25.1") (seq "2.3") (f "0.20.0") (s "1.12.0") (dash "2.17.0") (mustache "0.24") (ht "0.9"))
+;; Package-Requires: ((emacs "25.1"))
 ;; URL: https://github.com/tyler-dodge/compile-queue
 ;; Git-Repository: git://github.com/tyler-dodge/compile-queeue.git
 ;; This program is free software; you can redistribute it and/or modify
@@ -33,9 +33,11 @@
 (require 'ht)
 (require 'cl-lib)
 (require 'deferred)
+(require 's)
 
 (defgroup compile-queue nil
-  "Customization Group for Compile Queue.")
+  "Customization Group for Compile Queue."
+  :group 'convenience)
 
 (defcustom compile-queue-root-queue
   "compile-queue"
@@ -189,11 +191,11 @@ This example shows how compile-queue can be chained with deferred.el.
                                             (s-join " " (list ,@command-rest)))))))
 (defun compile-queue:$--shell-command (list)
   (when (memq (car list) (list 'shell '!))
-    (let* ((plist-end
+    (-let* ((plist-end
             (or
              (-some-> (->> list (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it)))))
-               (-partial '+ 2))
-             1))
+               (-partial '+ 2)))
+            1)
            (plist (-slice list 1 plist-end))
            (command-rest (-slice list plist-end)))
       `(compile-queue-shell-command-create ,@plist
@@ -233,7 +235,7 @@ This example shows how compile-queue can be chained with deferred.el.
           (--doto process
             (when it
               (setq-local compile-queue-shell-command--process-filter-delegate (process-filter it))
-              (setq-local compile-queue-shell-command--process-sentinal-delegate (process-sentinel it))
+              (setq-local compile-queue-shell-command--process-sentinel-delegate (process-sentinel it))
               (set-process-sentinel it #'compile-queue-shell-command--process-sentinel)
               (set-process-filter it #'compile-queue-shell-command--process-filter)))
           (compile-queue--update-buffer queue))))))
@@ -247,24 +249,24 @@ This example shows how compile-queue can be chained with deferred.el.
       (setf (compile-queue-execution queue)
             (compile-queue-command--execute next-command queue)))))
 
-(defun compile-queue-schedule (compile-queue command)
+(defun compile-queue-schedule (queue command)
   "Appends the COMMAND to the commands on QUEUE."
   (let ((promise (deferred:new)))
     (setf
-     (compile-queue-scheduled compile-queue)
-     (append (--> (compile-queue-scheduled compile-queue) (if (listp it) it (list it)))
+     (compile-queue-scheduled queue)
+     (append (--> (compile-queue-scheduled queue) (if (listp it) it (list it)))
              (list (compile-queue-promise-create
                     :command command
                     :deferred promise)) nil))
 
-    (when (not (compile-queue-execution compile-queue))
-      (compile-queue-execute compile-queue))
+    (when (not (compile-queue-execution queue))
+      (compile-queue-execute queue))
     promise))
 
-(defun compile-queue--buffer-name (compile-queue)
-  (or (compile-queue-buffer-name compile-queue)
-      (-some--> (compile-queue-name compile-queue) (concat "*" it "*"))
-      (user-error "Broken queue with no name: %S" compile-queue)))
+(defun compile-queue--buffer-name (queue)
+  (or (compile-queue-buffer-name queue)
+      (-some--> (compile-queue-name queue) (concat "*" it "*"))
+      (user-error "Broken queue with no name: %S" queue)))
 
 (defun compile-queue-execution--buffer-name (execution)
   (let ((command (compile-queue-promise-command
@@ -274,10 +276,9 @@ This example shows how compile-queue can be chained with deferred.el.
        (compile-queue-shell-command--buffer-name command)))))
 
 
-(defun compile-queue--update-buffer (compile-queue)
-  (when-let ((execution-buffer-name (-> compile-queue compile-queue-execution compile-queue-execution--buffer-name)))
-    (let* ((buffer-name (compile-queue--buffer-name compile-queue))
-           (execution-buffer (get-buffer execution-buffer-name))
+(defun compile-queue--update-buffer (queue)
+  (when-let ((execution-buffer-name (-> queue compile-queue-execution compile-queue-execution--buffer-name)))
+    (let* ((buffer-name (compile-queue--buffer-name queue))
            (old-buffer (get-buffer buffer-name))
            (windows (get-buffer-window-list old-buffer))
            (new-buffer (generate-new-buffer " *temp-queue*")))
@@ -343,8 +344,7 @@ This example shows how compile-queue can be chained with deferred.el.
                            (-> compile-queue compile-queue-execution compile-queue-execution-id)))
         (progn (let* ((compile-queue-end-pt (with-current-buffer (process-buffer process) (point-max)))
                       (scroll-to-end (->> (get-buffer-window-list compile-queue-buffer)
-                                          (--filter (eq (window-point it) compile-queue-end-pt))))
-                      (mark (1+ (- (process-mark process) (with-current-buffer (process-buffer process) (point-min))))))
+                                          (--filter (eq (window-point it) compile-queue-end-pt)))))
                  (-some--> delegate (funcall it process output))
                  (set-buffer (compile-queue--buffer-name (compile-queue-current)))
 
@@ -386,9 +386,9 @@ This example shows how compile-queue can be chained with deferred.el.
           (set-buffer (compile-queue--buffer-name compile-queue))
           (goto-char beg)
           (cond
-           ((string= (buffer-substring beg (+ beg length)))
+           ((string= (buffer-substring beg (+ beg length)) rhs)
             (let ((inhibit-read-only t))
-              (delete-char (- length))!))
+              (delete-char (- length))))
            ((string= (buffer-substring (- beg length) beg) lhs)
             (let ((inhibit-read-only t))
               (delete-char length))))))
@@ -404,3 +404,4 @@ This example shows how compile-queue can be chained with deferred.el.
   (setq-local buffer-read-only t))
 
 (provide 'compile-queue)
+;;; compile-queue.el ends here
