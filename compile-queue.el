@@ -34,6 +34,7 @@
 (require 'cl-lib)
 (require 'deferred)
 (require 's)
+(require 'rx)
 
 (defgroup compile-queue nil
   "Customization Group for Compile Queue."
@@ -85,6 +86,7 @@
 (cl-defstruct (compile-queue-execution (:constructor compile-queue-execution-create))
   (id (uuid-string))
   promise
+  buffer
   queue
   exit-status)
 
@@ -151,6 +153,20 @@ This example shows how compile-queue can be chained with deferred.el.
            (deferred:nextc it (lambda (&rest arg) ,@commands)))
        ,@commands))))
 
+(defun compile-queue-clean (&optional queue)
+  "Cleans up QUEUE or the result of `compile-queue-current'.
+Kills the current execution.
+"
+  (interactive)
+  (when-let ((queue (or queue (or queue (compile-queue-current)
+                                  (compile-queue--by-name compile-queue-root-queue)))))
+    (let ((process (-some-> queue compile-queue-execution compile-queue-execution-buffer get-buffer-process)))
+      (when (process-live-p process)
+        (kill-process process)))
+    (setf (compile-queue-execution queue) nil)
+    (setf (compile-queue-scheduled queue) nil))
+  t)
+
 (defvar compile-queue--converters
   '(compile-queue:$--deferred-shell-command
     compile-queue:$--shell-command)
@@ -178,30 +194,45 @@ This example shows how compile-queue can be chained with deferred.el.
 
 (defun compile-queue:$--deferred-shell-command (list)
   (when (memq (car list) '(deferred-shell !deferred))
-    (let* ((plist-end
-            (or (-some-> (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it))) list) 1+)
-                1))
-           (plist (-slice list 1 plist-end))
-           (command-rest (-slice list plist-end)))
-      (list
-       :deferred t
-       :command
-       `(compile-queue-shell-command-create ,@plist
-                                            :command
-                                            (s-join " " (list ,@command-rest)))))))
+    (list
+     :deferred t
+     :command
+     (compile-queue:$--shell-command (cons 'shell (cdr list))))))
 
 (defun compile-queue:$--shell-command (list)
   (when (memq (car list) (list 'shell '!))
-    (-let* ((plist-end
-             (or
-              (-some--> (->> list (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it)))))
-                (+ it 2))
-              1))
-            (plist (-slice list 1 plist-end))
-            (command-rest (-slice list plist-end)))
+    (-let [(plist . command-rest) (compile-queue--split-plist (cdr list))]
       `(compile-queue-shell-command-create ,@plist
                                            :command
                                            (s-join " " (list ,@command-rest))))))
+
+
+(defun compile-queue--split-plist (plist)
+  "Split PLIST into a cons cell (SUBPLIST . REST)
+where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of the PLIST excluding SUBPLIST."
+  (-let* ((plist-end
+           (or
+            (-some--> (->> plist (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it)))))
+              (+ it 2))
+            0))
+          (output-plist (-slice plist 0 plist-end))
+          (command-rest (-slice plist plist-end)))
+    (--each-indexed output-plist
+      (pcase (if (eq it-index 0) 0 (% it-index 2))
+        (1 (when (and (symbolp it)
+                      (s-starts-with-p ":" (symbol-name it)))
+             (error "Unexpected key in value slot %s, slot: %s, plist %s" it
+                    (nth (1- it-index) output-plist)
+                    output-plist)))
+        (0
+         (unless (and (symbolp it)
+                      (s-starts-with-p ":" (symbol-name it)))
+           (error "Unexpected Value %s at %d when expecting key. plist %s"
+                  it
+                  it-index
+                  output-plist)))))
+    (cons output-plist command-rest)))
+
 (defun compile-queue--by-name (name)
   (if (compile-queue-p name) name
     (or (ht-get compile-queue--name-map name)
@@ -212,16 +243,47 @@ This example shows how compile-queue can be chained with deferred.el.
   (lambda (callback)
     (save-selected-window
       (save-mark-and-excursion
-        (funcall callback execution)))))
+        (when (buffer-live-p (compile-queue-execution-buffer execution))
+          (funcall callback (compile-queue-execution-buffer execution)))))))
+
+(defmacro compile-queue--save-var-excursion (var-names &rest body)
+  (declare (indent 1))
+  (let* ((var-names (if (symbolp var-names) (list var-names) var-names))
+         (vars
+          (->> var-names
+               (--map (append
+                       (list
+                        (make-symbol
+                         (concat "old-"
+                                 (-> (pcase it
+                                       ((pred listp) (car it))
+                                       ((pred symbolp) it)
+                                       (_ (user-error "Unexpected type: %s" it)))
+                                     symbol-name))))
+                       (if (listp it)
+                           (list
+                            (car it)
+                            (cadr it))
+                         (list it)))))))
+    `(let ,(append
+            (->> vars (--map (list (car it) (cadr it))))
+            (->> vars (--map (when (caddr it) (list (cadr it) (caddr it))))
+                 (--filter it)))
+       (unwind-protect
+           (progn ,@body)
+         (progn
+           ,@(->> vars (--map `(setq ,(cadr it) ,(car it)))))))))
 
 (defun compile-queue-command--execute (promise queue)
   "Executes COMMAND in a buffer related to QUEUE."
-  (let ((command (compile-queue-promise-command promise)))
-    (set-buffer (compile-queue-shell-command--init-buffer command))
+  (let* ((command (compile-queue-promise-command promise))
+         (buffer (compile-queue-shell-command--init-buffer command)))
+    (set-buffer buffer)
     (when (not (memq #'compile-queue--forward-change after-change-functions))
       (setq-local after-change-functions (append (-some->> after-change-functions (-drop-last 1)) '(compile-queue--forward-change t))))
     (setq-local compile-queue queue)
     (let ((execution (compile-queue-execution-create
+                      :exit-status nil
                       :promise promise
                       :queue queue)))
       (setq-local compile-queue--execution execution)
@@ -233,6 +295,7 @@ This example shows how compile-queue can be chained with deferred.el.
                         (compile-queue-shell-command--name command)
                         (compile-queue-shell-command--buffer-name command)
                         (compile-queue-shell-command-command command))))
+          (setf (compile-queue-execution-buffer execution) buffer)
           (--doto process
             (when it
               (setq-local compile-queue-shell-command--process-filter-delegate (process-filter it))
@@ -278,7 +341,7 @@ This example shows how compile-queue can be chained with deferred.el.
 
 
 (defun compile-queue--update-buffer (queue)
-  (when-let ((execution-buffer-name (-> queue compile-queue-execution compile-queue-execution--buffer-name)))
+  (when-let ((execution-buffer (-> queue compile-queue-execution compile-queue-execution-buffer)))
     (let* ((buffer-name (compile-queue--buffer-name queue))
            (old-buffer (get-buffer buffer-name))
            (windows (get-buffer-window-list old-buffer))
@@ -289,7 +352,7 @@ This example shows how compile-queue can be chained with deferred.el.
         (kill-buffer old-buffer))
       (set-buffer new-buffer)
       (compile-queue-mode)
-      (unless (string= buffer-name (buffer-name))
+      (unless (string= buffer-name (buffer-name new-buffer))
         (rename-buffer buffer-name))
       (goto-char (point-max)))))
 
@@ -329,7 +392,7 @@ This example shows how compile-queue can be chained with deferred.el.
      (or (compile-queue-shell-command-major-mode command)
          compile-queue-shell-default-major-mode))
 
-    (prog1 (current-buffer)
+    (prog1 (get-buffer buffer-name)
       (when directory (setq-local default-directory directory))
       (goto-char (point-max)))))
 
@@ -341,8 +404,8 @@ This example shows how compile-queue can be chained with deferred.el.
          (delegate
           (-some->> execution-buffer
             (buffer-local-value 'compile-queue-shell-command--process-filter-delegate))))
-    (if (and execution (eq (-> execution compile-queue-execution-id)
-                           (-> compile-queue compile-queue-execution compile-queue-execution-id)))
+    (if (and execution (eq (-some-> execution compile-queue-execution-id)
+                           (-some-> compile-queue compile-queue-execution compile-queue-execution-id)))
         (progn (let* ((compile-queue-end-pt (with-current-buffer (process-buffer process) (point-max)))
                       (scroll-to-end (->> (get-buffer-window-list compile-queue-buffer)
                                           (--filter (eq (window-point it) compile-queue-end-pt)))))
@@ -356,27 +419,33 @@ This example shows how compile-queue can be chained with deferred.el.
 
 (defun compile-queue-shell-command--process-sentinel (process status)
   "Delegating sentinel for compile-queue. Handles notifying compile queue on process completion."
-  (let ((delegate
-         (-some->> process
-           (compile-queue-current)
-           (compile-queue-execution)
-           (compile-queue-execution--buffer-name)
-           (get-buffer)
-           (buffer-local-value 'compile-queue-shell-command--process-sentinel-delegate))))
-    (-some--> delegate (funcall it process status))
-    (when-let ((queue (compile-queue-current process)))
-      (let ((execution (-some-> queue compile-queue-execution)))
-        (-some-->
-            (-some-> execution
-              compile-queue-execution-promise
-              compile-queue-promise-command
-              compile-queue-command-after-complete)
-          (funcall (compile-queue--callback execution) it))
-        (-some--> execution
-          (compile-queue-execution-promise it)
-          (compile-queue-promise-deferred it)
-          (deferred:callback it (get-buffer (compile-queue-execution--buffer-name execution)))))
-      (compile-queue-execute queue))))
+  (unless (process-live-p process)
+    (let* ((buffer (-some-> process
+                     compile-queue-current
+                     compile-queue-execution
+                     compile-queue-execution-buffer))
+           (delegate
+            (-some->> buffer
+              (buffer-local-value 'compile-queue-shell-command--process-sentinel-delegate))))
+      (compile-queue--save-var-excursion ((inhibit-read-only t))
+        (-some--> delegate (funcall it process status)))
+      (when-let ((queue (compile-queue-current process)))
+        (let ((execution (-some-> queue compile-queue-execution)))
+          (-some--> execution
+            (setf (compile-queue-execution-exit-status it)
+                  (compile-queue--exit-status-for-process process status)))
+          (-some-->
+              (-some-> execution
+                compile-queue-execution-promise
+                compile-queue-promise-command
+                compile-queue-command-after-complete)
+            (funcall (compile-queue--callback execution) it))
+          (when-let ((execution-buffer (-some-> execution compile-queue-execution-buffer)))
+            (-some--> execution
+              (compile-queue-execution-promise it)
+              (compile-queue-promise-deferred it)
+              (deferred:callback it execution-buffer))))
+        (compile-queue-execute queue)))))
 
 (defun compile-queue--forward-change (beg end length)
   (when (eq compile-queue--execution (compile-queue-execution compile-queue))
@@ -389,15 +458,27 @@ This example shows how compile-queue can be chained with deferred.el.
           (cond
            ((string= (buffer-substring beg (+ beg length)) rhs)
             (let ((inhibit-read-only t))
-              (delete-char (- length))))
+              (delete-char length)))
            ((string= (buffer-substring (- beg length) beg) lhs)
             (let ((inhibit-read-only t))
-              (delete-char length))))))
+              (delete-char (- length)))))))
     (let ((text (buffer-substring beg end)))
       (set-buffer (compile-queue--buffer-name compile-queue))
       (goto-char beg)
       (let ((inhibit-read-only t))
         (insert text)))))
+
+(defun compile-queue--exit-status-for-process (process status)
+  (pcase (process-status process)
+    ((or 'exit 'signal 'failed)
+     (pcase (s-trim status)
+       ("finished" 0)
+       ((rx line-start "exited abnormally with code" (* whitespace) (let code (* digit)))
+        (string-to-number code))
+       (_ nil))
+     )
+    (_ nil))
+  )
 
 (define-derived-mode compile-queue-mode fundamental-mode "Compile-Queue"
   "Mode for mirroring the output of the current queue's execution's compile buffer."

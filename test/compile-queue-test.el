@@ -15,6 +15,7 @@
 
 (ert-deftest-async compile-queue-should-run-two-commands (done)
   "Basic path for running two commands sequentially."
+  (compile-queue-clean)
   (let* ((index 0)
          (done done))
     (compile-queue:$
@@ -33,6 +34,7 @@
 
 (ert-deftest-async compile-queue-should-output-buffer-in-deferred (done)
   "The buffer should be provided via a deferred object at the end of the chain."
+  (compile-queue-clean)
   (let* ((index 0)
          (done done))
     (deferred:$
@@ -45,6 +47,100 @@
                    (s-trim
                     (with-current-buffer buffer
                       (buffer-string)))))
+          (funcall done))))))
+
+(ert-deftest-async compile-queue-should-set-execution-exit-status (done)
+  "Exit status should be set on the execution object"
+  (compile-queue-clean)
+  (deferred:$
+    (compile-queue:$
+      (shell
+       :before-start
+       (lambda (buffer)
+         (set-buffer buffer)
+         (should (eq (compile-queue-execution-exit-status compile-queue--execution)
+                     nil)))
+       :after-complete
+       (lambda (buffer)
+         (set-buffer buffer)
+         (should (eq (compile-queue-execution-exit-status compile-queue--execution)
+                     0)))
+       "true")
+      (shell
+       :before-start
+       (lambda (buffer)
+         (set-buffer buffer)
+         (should (eq (compile-queue-execution-exit-status compile-queue--execution)
+                     nil))
+         )
+       :after-complete
+       (lambda (buffer)
+         (set-buffer buffer)
+         (should (eq (compile-queue-execution-exit-status compile-queue--execution)
+                     1)))
+       "false"))
+    (deferred:nextc it
+      (lambda (buffer)
+        (funcall done)))))
+
+(ert-deftest-async compile-queue-should-reset-state (done)
+  "Execution state should be reset between runs"
+  (compile-queue-clean)
+  (deferred:$
+    (compile-queue:$
+      (shell
+       :before-start
+       (lambda (buffer)
+         (set-buffer buffer)
+         (should (eq (compile-queue-execution-exit-status compile-queue--execution) nil)))
+       :after-complete
+       (lambda (buffer)
+         (set-buffer buffer)
+         (should (eq (compile-queue-execution-exit-status compile-queue--execution) 1)))
+       "false")
+      (shell
+       :before-start
+       (lambda (buffer)
+         (set-buffer buffer)
+         (should (eq (compile-queue-execution-exit-status compile-queue--execution) nil)))
+       :after-complete
+       (lambda (buffer)
+         (set-buffer buffer)
+         (should (eq (compile-queue-execution-exit-status compile-queue--execution) 1)))
+       "false"))
+    (deferred:nextc it
+      (lambda (buffer)
+        (funcall done)))))
+
+(ert-deftest-async compile-queue-should-defer-scheduling (done)
+  "deferred-shell should defer scheduling"
+  (compile-queue-clean)
+  (let* ((index 0))
+    (deferred:$
+      (compile-queue:$
+        (shell
+         :after-complete
+         (lambda (buffer)
+           (should (eq index 0))
+           (setq index (1+ index))
+           )
+         "echo 1")
+        (deferred-shell
+          :after-complete
+          (lambda (buffer)
+            (should (eq index 2))
+            (setq index (1+ index)))
+          "echo 3")
+
+        (shell
+         :after-complete
+         (lambda (buffer)
+           (should (eq index 1))
+           (setq index (1+ index)))
+         "echo 2")
+        )
+      (deferred:nextc it
+        (lambda (buffer)
           (funcall done))))))
 
 (provide 'compile-queue-test)
