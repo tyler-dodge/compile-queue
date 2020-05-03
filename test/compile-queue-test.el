@@ -49,7 +49,7 @@
                       (buffer-string)))))
           (funcall done))))))
 
-(ert-deftest-async compile-queue-should-set-execution-exit-status (done)
+(ert-deftest-async compile-queue-should-set-execution-status-code (done)
   "Exit status should be set on the execution object"
   (compile-queue-clean)
   (deferred:$
@@ -58,32 +58,32 @@
        :before-start
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-exit-status compile-queue--execution)
+         (should (eq (compile-queue-execution-status-code compile-queue--execution)
                      nil)))
        :after-complete
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-exit-status compile-queue--execution)
+         (should (eq (compile-queue-execution-status-code compile-queue--execution)
                      0)))
        "true")
       (shell
        :before-start
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-exit-status compile-queue--execution)
+         (should (eq (compile-queue-execution-status-code compile-queue--execution)
                      nil))
          )
        :after-complete
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-exit-status compile-queue--execution)
+         (should (eq (compile-queue-execution-status-code compile-queue--execution)
                      1)))
        "false"))
-    (deferred:nextc it
+    (deferred:error it
       (lambda (buffer)
         (funcall done)))))
 
-(ert-deftest-async compile-queue-should-reset-state (done)
+(ert-deftest-async compile-queue-should-reset-state (recovered done)
   "Execution state should be reset between runs"
   (compile-queue-clean)
   (deferred:$
@@ -92,23 +92,40 @@
        :before-start
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-exit-status compile-queue--execution) nil)))
+         (should (eq (compile-queue-execution-status-code compile-queue--execution) nil)))
        :after-complete
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-exit-status compile-queue--execution) 1)))
-       "false")
-      (shell
-       :before-start
-       (lambda (buffer)
-         (set-buffer buffer)
-         (should (eq (compile-queue-execution-exit-status compile-queue--execution) nil)))
-       :after-complete
-       (lambda (buffer)
-         (set-buffer buffer)
-         (should (eq (compile-queue-execution-exit-status compile-queue--execution) 1)))
+         (should (eq (compile-queue-execution-status-code compile-queue--execution) 1)))
        "false"))
+    (deferred:error it
+      (lambda ()
+        (compile-queue:$
+          (shell
+           :before-start
+           (lambda (buffer)
+             (set-buffer buffer)
+             (should (eq (compile-queue-execution-status-code compile-queue--execution) nil)))
+           :after-complete
+           (lambda (buffer)
+             (set-buffer buffer)
+             (should (eq (compile-queue-execution-status-code compile-queue--execution) 0)))
+           "true"))))
     (deferred:nextc it
+      (lambda ()
+        (funcall recovered)
+        (compile-queue:$
+          (shell
+           :before-start
+           (lambda (buffer)
+             (set-buffer buffer)
+             (should (eq (compile-queue-execution-status-code compile-queue--execution) nil)))
+           :after-complete
+           (lambda (buffer)
+             (set-buffer buffer)
+             (should (eq (compile-queue-execution-status-code compile-queue--execution) 1)))
+           "false"))))
+    (deferred:error it
       (lambda (buffer)
         (funcall done)))))
 
@@ -122,8 +139,7 @@
          :after-complete
          (lambda (buffer)
            (should (eq index 0))
-           (setq index (1+ index))
-           )
+           (setq index (1+ index)))
          "echo 1")
         (deferred-shell
           :after-complete
