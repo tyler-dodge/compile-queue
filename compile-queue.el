@@ -460,7 +460,7 @@ return *`compile-queue-shell-command-name'*.
 Otherwise return the command's string truncated."
   (or (compile-queue-shell-command-buffer-name command)
       (-some--> (compile-queue-shell-command-name command) (concat " *" it "*"))
-      (concat " *" (s-truncate 10 (compile-queue-shell-command-command command)) "*")))
+      (concat " *" (s-truncate 20 (compile-queue-shell-command-command command)) "*")))
 
 (defun compile-queue-shell-command--name (command)
   "Return the name of COMMAND.
