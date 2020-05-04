@@ -443,8 +443,9 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
          (delegate
           (-some->> buffer
             (buffer-local-value 'compile-queue-shell-command--process-sentinel-delegate))))
-    (compile-queue--save-var-excursion ((inhibit-read-only t))
-      (-some--> delegate (funcall it process status)))
+    (unless (eq delegate #'internal-default-process-sentinel)
+      (compile-queue--save-var-excursion ((inhibit-read-only t))
+        (-some--> delegate (funcall it process status))))
 
     (unless (process-live-p process)
       (when-let ((queue (compile-queue-current process)))
@@ -474,22 +475,10 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
 
 (defun compile-queue--forward-change (beg end length)
   (when (eq compile-queue--execution (compile-queue-execution compile-queue))
-    (if (< length 0)
-        (let* ((length (abs length))
-               (lhs (buffer-substring (- beg length) beg))
-               (rhs (buffer-substring beg (+ beg length))))
-          (set-buffer (compile-queue--buffer-name compile-queue))
-          (goto-char beg)
-          (cond
-           ((string= (buffer-substring beg (+ beg length)) rhs)
-            (let ((inhibit-read-only t))
-              (delete-char (- length))))
-           ((string= (buffer-substring (- beg length) beg) lhs)
-            (let ((inhibit-read-only t))
-              (delete-char length))))))
     (let ((text (buffer-substring beg end)))
       (set-buffer (compile-queue--buffer-name compile-queue))
       (goto-char beg)
+      (delete-char length)
       (let ((inhibit-read-only t))
         (insert text)))))
 

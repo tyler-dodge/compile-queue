@@ -43,7 +43,7 @@
       (deferred:nextc it
         (lambda (buffer)
           (should (string=
-                   "A\n\nProcess echo A finished"
+                   "A\n\nProcess"
                    (s-trim
                     (with-current-buffer buffer
                       (buffer-string)))))
@@ -153,8 +153,7 @@
          (lambda (buffer)
            (should (eq index 1))
            (setq index (1+ index)))
-         "echo 2")
-        )
+         "echo 2"))
       (deferred:nextc it
         (lambda (buffer)
           (funcall done))))))
