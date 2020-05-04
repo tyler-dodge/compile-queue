@@ -8,6 +8,7 @@
  (depends-on "projectile")
  (depends-on "ert-async")
  (depends-on "el-mock")
+ (depends-on "s")
  (depends-on "undercover")
  (depends-on "uuid")
  (depends-on "ht")
