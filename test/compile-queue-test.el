@@ -173,4 +173,47 @@
           (set-buffer (compile-queue--buffer-name (compile-queue-current)))
           (funcall done))))))
 
+
+(ert-deftest-async compile-queue-should-handle-concurrency (done)
+  "compile-queue should handle concurrent executions"
+  (compile-queue-clean)
+  (let* ((index 0))
+    (deferred:$
+      (compile-queue:$
+        (shell
+         :after-complete
+         (lambda (buffer)
+           (set-buffer buffer)
+           (should (eq index 3))
+           (setq index (1+ index))
+           (should (eq "A" (s-trim (buffer-string)))))
+         :major-mode #'fundamental-mode
+         :matcher (lambda (_) t)
+         "echo A; sleep 2")
+        (deferred-shell
+          :after-complete
+          (lambda (buffer)
+            (set-buffer buffer)
+            (should (eq index 1))
+            (setq index (1+ index))
+            (should (eq "B" (s-trim (buffer-string)))))
+          :major-mode #'fundamental-mode
+          :matcher (lambda (_) t)
+          "echo B; sleep 1")
+        (shell
+         :major-mode #'fundamental-mode
+         :matcher (lambda (_) t)
+         :after-complete
+         (lambda (buffer)
+           (set-buffer buffer)
+           (should (eq index 2))
+           (setq index (1+ index))
+           (should (eq "C" (s-trim (buffer-string)))))
+         "echo C; sleep 1.5"))
+      (deferred:nextc it
+        (lambda (buffer)
+          (should (eq index 0))
+          (setq index (1+ index))
+          (funcall done))))))
+
 (provide 'compile-queue-test)
