@@ -22,9 +22,8 @@
 ;;;
 ;;;
 ;;; Commentary:
-;; Main entrypoint is meant to be the compile-queue:$ macro
-;;
-;;
+;; The package for running lists of commands, while viewing their output.
+;; Main entrypoint is meant to be the `compile-queue:$' macro
 ;;
 ;;; Code:
 
@@ -161,6 +160,8 @@ QUEUE-NAME is optional.
 Currently there are 2 special types
 
 (shell &rest COMMAND)
+See `compile-queue-shell-command' for keywords
+
 (! &rest COMMAND) - run the command specified by joining
 the list of COMMAND with spaces
 
@@ -168,6 +169,7 @@ the list of COMMAND with spaces
 (deferred-shell &rest COMMAND)
 (!deferred &rest COMMAND) - waits to schedule the command
 until the deferred chain before this has already completed.
+See `compile-queue-shell-command' for keywords
 
 The deferred promise receives the output buffer as the argument
 once the execution completes.

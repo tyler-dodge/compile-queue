@@ -12,6 +12,46 @@ The package for running lists of commands, while viewing their output.
 
 Coming soon to MELPA!
 
+## Usage
+
+```
+(compile-queue:$ QUEUE-NAME &rest COMMANDS)
+```
+compile-queue:$ is a macro for chaining COMMANDS on the compile-queue.
+Fully compatible with [deferred.el's](https://github.com/kiwanami/emacs-deferred) deferred:$
+
+QUEUE-NAME is optional.
+
+Currently there are 2 special types
+
+(shell &rest COMMAND)
+(! &rest COMMAND) - run the command specified by joining
+the list of COMMAND with spaces
+
+
+(deferred-shell &rest COMMAND)
+(!deferred &rest COMMAND) - waits to schedule the command
+until the deferred chain before this has already completed.
+
+Both shell and deferred-shell take the following as keywords
+
+```
+:env A cons list of environment variables like ((\"KEY2\" . \"VALUE2\") (\"KEY2\" . \"VALUE2\"))
+```
+
+```
+:major-mode The major mode to use for the buffer that handles the output from the shell command
+```
+
+```
+:default-directory The default-directory to use when executing the shell command
+```
+
+
+```
+:buffer-name The name of the buffer that will handle the output from the shell command.
+```
+
 ## Examples
 
 ### Running Commands in Order
