@@ -236,4 +236,22 @@
     (should-not (compile-queue-execution queue))
     (should-not (compile-queue-scheduled queue))))
 
+(ert-deftest-async compile-queue-trail-window (done)
+  "compile-queue-clean should work correctly"
+  (let* ((queue-name "queue")
+         (queue (compile-queue-current queue-name)))
+    (compile-queue:$
+      (shell
+       :after-complete
+       (lambda (buffer)
+         (set-buffer (window-buffer (selected-window)))
+         (should (string= (s-trim (buffer-string))
+                          "A"))
+         (should (eq (window-point (selected-window)) (point-max)))
+         (funcall done))
+       :major-mode #'fundamental-mode
+       "echo A; sleep 2"))
+    (switch-to-buffer (compile-queue--buffer-name (compile-queue-current compile-queue-root-queue)))
+    (set-window-point (selected-window) (point-max))))
+
 (provide 'compile-queue-test)
