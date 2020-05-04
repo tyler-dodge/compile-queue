@@ -417,21 +417,6 @@ Uses the `compile-queue-name' if `compile-queue-buffer-name' is unset."
       (-some--> (compile-queue-name queue) (concat "*" it "*"))
       (user-error "Broken queue with no name: %S" queue)))
 
-(defun compile-queue-execution--buffer-name (execution)
-  "Return the buffer name of the QUEUE.
-Uses the live buffer if it is set. Otherwise falls back to the buffer-name
-defined by `compile-queue--buffer-name'
-
-Uses the `compile-queue-name' if `compile-queue-buffer-name' is unset."
-  (or (-some--> (compile-queue-execution-buffer execution)
-        (when (buffer-live-p it) it)
-        (buffer-name it))
-      (let ((command (compile-queue-promise-command
-                      (compile-queue-execution-promise execution))))
-        (pcase command
-          ((cl-struct compile-queue-shell-command)
-           (compile-queue-shell-command--buffer-name command))))))
-
 (defun compile-queue--update-buffer (queue)
   "Update the target view buffer of the QUEUE."
   (when-let ((execution-buffer (-> queue compile-queue-execution compile-queue-execution-buffer)))
