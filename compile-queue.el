@@ -415,24 +415,30 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
 
 (defun compile-queue-shell-command--process-filter (process output)
   (let* ((execution-buffer (process-buffer process))
+         (compile-queue (compile-queue-current process))
+         (compile-queue-buffer (-some-> compile-queue compile-queue--buffer-name get-buffer))
          (delegate
           (-some->> execution-buffer
-            (buffer-local-value 'compile-queue-shell-command--process-filter-delegate))))
+            (buffer-local-value 'compile-queue-shell-command--process-filter-delegate)))
+         (compile-queue-end-pt (with-current-buffer (process-buffer process) (point-max)))
+         (scroll-to-end (->> (get-buffer-window-list compile-queue-buffer)
+                             (--filter (eq (window-point it) compile-queue-end-pt)))))
     (-some--> delegate (funcall it process output))
 
-    (let* ((compile-queue (compile-queue-current process))
-           (compile-queue-buffer (get-buffer (compile-queue--buffer-name compile-queue)))
-           (execution (buffer-local-value 'compile-queue--execution execution-buffer)))
+    (let* ((execution (buffer-local-value 'compile-queue--execution execution-buffer)))
       (if (and execution (eq (-some-> execution compile-queue-execution-id)
                              (-some-> compile-queue compile-queue-execution compile-queue-execution-id)))
-          (progn (let* ((compile-queue-end-pt (with-current-buffer (process-buffer process) (point-max)))
-                        (scroll-to-end (->> (get-buffer-window-list compile-queue-buffer)
-                                            (--filter (eq (window-point it) compile-queue-end-pt)))))
-                   (set-buffer (compile-queue--buffer-name (compile-queue-current)))
-
-                   (let ((pt-max (point-max)))
-                     (--each scroll-to-end
-                       (set-window-point it pt-max)))))))))
+          (progn
+            (set-buffer (compile-queue--buffer-name (compile-queue-current)))
+            (let ((pt-max (point-max)))
+              (--each scroll-to-end
+                (set-window-point it pt-max)
+                (set-window-start
+                 it
+                 (save-excursion
+                   (goto-char pt-max)
+                   (forward-line (floor (- (- (window-height it 'floor) 3))))
+                   (point))))))))))
 
 (defun compile-queue-shell-command--process-sentinel (process status)
   "Delegating sentinel for compile-queue. Handles notifying compile queue on process completion."
@@ -496,6 +502,9 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
   "Mode for mirroring the output of the current queue's execution's compile buffer."
   :group 'compile-queue
   (read-only-mode 1))
+
+(when (boundp 'evil-motion-state-modes)
+  (add-to-list 'evil-motion-state-modes 'compile-queue-mode))
 
 (provide 'compile-queue)
 ;;; compile-queue.el ends here

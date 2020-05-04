@@ -43,7 +43,7 @@
       (deferred:nextc it
         (lambda (buffer)
           (should (string=
-                   "A\n\nProcess"
+                   "A"
                    (s-trim
                     (with-current-buffer buffer
                       (buffer-string)))))
