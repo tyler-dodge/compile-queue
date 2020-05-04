@@ -23,7 +23,7 @@
 ;;;
 ;;; Commentary:
 ;; The package for running lists of commands, while viewing their output.
-;; Main entrypoint is meant to be the `compile-queue:$' macro
+;; Main entrypoint is meant to be the `compile-queue:-$' macro
 ;;
 ;;; Code:
 
@@ -155,24 +155,24 @@ If nil, it defaults to a truncated version of the command."
 (put 'compile-queue-shell-command-create 'compiler-macro nil)
 
 ;;;###autoload
-(defmacro compile-queue:$ (queue-name &rest commands)
+(defmacro compile-queue-$ (queue-name &rest commands)
   "Small DSL for chaining COMMANDS on the compile-queue.
-Fully compatible with deferred.el's deferred:$
+Fully compatible with deferred.el's `deferred-$'
 
 
 QUEUE-NAME is optional.
 
 Currently there are 2 special types
 
-(shell &rest COMMAND)
-See `compile-queue-shell-command' for keywords
+`(shell &rest COMMAND)'
+See `compile-queue-shell-command' for keywords.
 
-(! &rest COMMAND) - run the command specified by joining
+`(! &rest COMMAND)' - run the command specified by joining
 the list of COMMAND with spaces
 
 
-(deferred-shell &rest COMMAND)
-(!deferred &rest COMMAND) - waits to schedule the command
+`(deferred-shell &rest COMMAND)'
+`(!deferred &rest COMMAND)' - waits to schedule the command
 until the deferred chain before this has already completed.
 See `compile-queue-shell-command' for keywords
 
@@ -181,22 +181,22 @@ once the execution completes.
 
 
 Example:
-(compile-queue:$
+`(compile-queue-$
   (shell \"echo A\")
   (deferred-shell \"echo C\")
-  (shell \"echo B\"))
+  (shell \"echo B\"))'
 
 This example will end up displaying C because the command \"echo C\"
 is not scheduled until after \"echo A\" finishes execution
 whereas \"echo B\" is scheduled before \"echo B\" starts executing.
 
 Example:
-(compile-queue:$
+`(compile-queue-$
   (shell \"echo A\")
   (deferred:nextc it
     (lambda (buffer)
       (set-buffer buffer)
-      (message \"%s\" (s-trim (buffer-string))))))
+      (message \"%s\" (s-trim (buffer-string))))))'
 
 This example shows how compile-queue can be chained with deferred.el."
   (declare (debug t)
@@ -204,7 +204,7 @@ This example shows how compile-queue can be chained with deferred.el."
   (let* ((queue-name-is-queue (or (stringp queue-name) (symbolp queue-name)))
          (queue-var (make-symbol "queue"))
          (commands (->> (if queue-name-is-queue commands (append (list queue-name) commands))
-                        (--map (compile-queue:$-command queue-var it)))))
+                        (--map (compile-queue-$-command queue-var it)))))
     `(let* ((,queue-var
              (compile-queue--by-name ,(if queue-name-is-queue queue-name compile-queue-root-queue)))
             (it nil))
@@ -233,9 +233,9 @@ Kills the current execution."
   t)
 
 (defvar compile-queue--converters
-  '(compile-queue:$--deferred-shell-command
-    compile-queue:$--shell-command)
-  "Converters for `compile-queue:$'.
+  '(compile-queue-$--deferred-shell-command
+    compile-queue-$--shell-command)
+  "Converters for `compile-queue-$'.
 A converter receives a list and if it matches return either a form
 that'll be evaluated to create a `compile-queue-command' or a list
 of the form (:deferred t :command FORM)
@@ -243,19 +243,19 @@ where FORM is the form that would've been evaluated.
 
 Each are applied sequentially until one returns non-nil.")
 
-(cl-defun compile-queue:$-convert (list)
+(cl-defun compile-queue-$-convert (list)
   "Runs each of the converters in `compile-queue--converters' against LIST. Returns the first match."
   (cl-loop for converter in compile-queue--converters
            do
            (when-let (result (funcall converter list))
-             (cl-return-from compile-queue:$-convert result))))
+             (cl-return-from compile-queue-$-convert result))))
 
-(cl-defun compile-queue:$-command (queue-var command)
-  "Macro help for function for generating a link in the compile-queue:$ chain for COMMAND.
+(cl-defun compile-queue-$-command (queue-var command)
+  "Macro help for function for generating a link in the compile-queue-$ chain for COMMAND.
 Handles deferring if the converter returns a form (:deferred t :command).
 QUEUE-VAR is the symbol of a variable that points the queue name.
 "
-  (if-let ((output-command (compile-queue:$-convert command)))
+  (if-let ((output-command (compile-queue-$-convert command)))
       (if (plist-member output-command :deferred)
           (if (plist-get output-command :deferred)
               `(setq it (deferred:nextc it
@@ -273,15 +273,15 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
 
 
 
-(defun compile-queue:$--deferred-shell-command (list)
+(defun compile-queue-$--deferred-shell-command (list)
   "Return `deferred-shell' if LIST match."
   (when (memq (car list) '(deferred-shell !deferred))
     (list
      :deferred t
      :command
-     (compile-queue:$--shell-command (cons 'shell (cdr list))))))
+     (compile-queue-$--shell-command (cons 'shell (cdr list))))))
 
-(defun compile-queue:$--shell-command (list)
+(defun compile-queue-$--shell-command (list)
   "Return `shell' if LIST match."
   (when (memq (car list) (list 'shell '!))
     (-let* (((plist . command-rest) (compile-queue--split-plist (cdr list)))
@@ -291,7 +291,8 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
       `(compile-queue-shell-command-create
         ,@(ht->plist plist-ht)
         :matcher ,(cond
-                   ((or (eq matcher nil) (symbolp matcher)
+                   ((or (not matcher)
+                        (symbolp matcher)
                         (and (listp matcher) (eq (car matcher) 'lambda)))
                     matcher)
                    (t `(lambda (it) ,matcher)))
@@ -303,7 +304,7 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
 where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of the PLIST excluding SUBPLIST."
   (-let* ((plist-end
            (or
-            (-some--> (->> plist (--find-last-index (and (symbolp it) (s-starts-with-p ":" (symbol-name it)))))
+            (-some--> (->> plist (--find-last-index (and (symbolp it) (string-prefix-p ":" (symbol-name it)))))
               (+ it 2))
             0))
           (output-plist (-slice plist 0 plist-end))
@@ -311,13 +312,13 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
     (--each-indexed output-plist
       (pcase (if (eq it-index 0) 0 (% it-index 2))
         (1 (when (and (symbolp it)
-                      (s-starts-with-p ":" (symbol-name it)))
+                      (string-prefix-p ":" (symbol-name it)))
              (error "Unexpected key in value slot %s, slot: %s, plist %s" it
                     (nth (1- it-index) output-plist)
                     output-plist)))
         (0
          (unless (and (symbolp it)
-                      (s-starts-with-p ":" (symbol-name it)))
+                      (string-prefix-p ":" (symbol-name it)))
            (error "Unexpected Value %s at %d when expecting key.  plist %s"
                   it
                   it-index
@@ -498,7 +499,7 @@ Replaces the buffer if it already exists."
      (or (compile-queue-shell-command-major-mode command)
          compile-queue-shell-default-major-mode))
 
-    (when (not (memq #'compile-queue--forward-change after-change-functions))
+    (unless (memq #'compile-queue--forward-change after-change-functions)
       (setq-local after-change-functions (append (-some->> after-change-functions (-drop-last 1)) '(compile-queue--forward-change t))))
 
     (prog1 (get-buffer buffer-name)
@@ -594,7 +595,7 @@ Handles notifying compile queue the process STATUS on completion."
                 (compile-queue-execution-promise it)
                 (compile-queue-promise-deferred it)
                 (deferred:callback it (-some-> execution compile-queue-execution-buffer))))
-            (when (not killed) (compile-queue-execute queue))))))))
+            (unless killed (compile-queue-execute queue))))))))
 
 (defun compile-queue--forward-change (beg end length)
   "Forward change from an execution buffer to its compile-queue buffer.
@@ -624,7 +625,7 @@ from the execution-buffer in the compile-queue buffer."
   (string= (-some-> lhs compile-queue-execution-id)
            (-some-> rhs compile-queue-execution-id)))
 
-(define-derived-mode compile-queue-mode fundamental-mode "Compile-Queue"
+(define-derived-mode compile-queue-mode special-mode "Compile-Queue"
   "Mode for mirroring the output of the current queue's execution's compile buffer."
   :group 'compile-queue
   (read-only-mode 1))

@@ -15,9 +15,9 @@ Coming soon to MELPA!
 ## Usage
 
 ```
-(compile-queue:$ QUEUE-NAME &rest COMMANDS)
+(compile-queue-$ QUEUE-NAME &rest COMMANDS)
 ```
-compile-queue:$ is a macro for chaining COMMANDS on the compile-queue.
+compile-queue-$ is a macro for chaining COMMANDS on the compile-queue.
 Fully compatible with [deferred.el's](https://github.com/kiwanami/emacs-deferred) deferred:$
 
 QUEUE-NAME is optional.
@@ -59,7 +59,7 @@ Both shell and deferred-shell take the following as keywords
 ### Running Commands in Order
 
 ```
-(compile-queue:$
+(compile-queue-$
 (shell "echo Command 1")
 (shell "echo Command 2"))
 ```
@@ -81,7 +81,7 @@ in the buffer specified by compile-queue-root-queue.
 ### Running Commands After Match
 
 ```
-(compile-queue:$
+(compile-queue-$
 (shell :buffer-name "*long*" :matcher (re-search-regexp "Command 2" nil t) "echo Command 1;sleep 1; echo Command 2; sleep 1; echo Command 3")
 (shell "echo Next"))
 ```
@@ -119,10 +119,10 @@ The block will still finish running even though the compile-queue is no longer d
 ### Running Commands on Multiple Queues
 
 ```
-(compile-queue:$ "queue-1"
+(compile-queue-$ "queue-1"
   (shell "echo Queue 1;sleep 1; echo DONE"))
 
-(compile-queue:$ "queue-2"
+(compile-queue-$ "queue-2"
   (shell "echo Queue 2;sleep 2; echo DONE"))
 ```
 
