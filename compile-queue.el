@@ -186,7 +186,7 @@ This example shows how compile-queue can be chained with deferred.el.
 "
   (declare (debug t)
            (indent 0))
-  (let* ((queue-name-is-queue (stringp queue-name))
+  (let* ((queue-name-is-queue (or (stringp queue-name) (symbolp queue-name)))
          (queue-var (make-symbol "queue"))
          (commands (->> (if queue-name-is-queue commands (append (list queue-name) commands))
                         (--map (compile-queue:$-command queue-var it)))))
@@ -196,7 +196,7 @@ This example shows how compile-queue can be chained with deferred.el.
        ,@(->> (-drop-last 1 commands) (-map #'macroexpand))
        (prog1 ,@(->> (last commands) (-map #'macroexpand))))))
 
-(defun compile-queue-clean (&optional queue skip-execution)
+(defun compile-queue-clean (&optional queue)
   "Cleans up QUEUE or the result of `compile-queue-current'.
 Kills the current execution.
 "
@@ -206,11 +206,6 @@ Kills the current execution.
     (let ((process (-some-> queue compile-queue-execution compile-queue-execution-buffer get-buffer-process)))
       (when (process-live-p process)
         (kill-process process)))
-    (when skip-execution
-      (-some--> (-some-> queue compile-queue-execution
-                         compile-queue-execution-promise
-                         compile-queue-promise-deferred)
-        (deferred:errorback it "Queue Killed")))
     (--each
         (->>
          (compile-queue-scheduled queue)
@@ -457,6 +452,7 @@ If OBJECT is nil, return the value of `compile-queue' for the current buffer.
     ((pred processp) (buffer-local-value 'compile-queue (process-buffer object)))
     ((pred bufferp) (buffer-local-value 'compile-queue object))
     ((pred windowp) (buffer-local-value 'compile-queue object))
+    ((pred stringp) (compile-queue--by-name object))
     ('nil (buffer-local-value 'compile-queue (current-buffer)))
     (_ (error "Unexpected type passed to compile-queue-current %s" object))))
 
@@ -538,8 +534,9 @@ Also, manages scolling windows to the end if the point is currently set at point
           (compile-queue-execute queue))))
 
     (let* ((execution (buffer-local-value 'compile-queue--execution process-buffer)))
-      (if (and execution (eq (-some-> execution compile-queue-execution-id)
-                             (-some-> queue compile-queue-execution compile-queue-execution-id)))
+      (if (and execution (compile-queue-execution-eq-id
+                          execution
+                          (-some-> queue compile-queue-execution)))
           (progn
             (set-buffer (compile-queue--buffer-name queue))
             (let ((pt-max (point-max)))
@@ -568,13 +565,14 @@ Handles notifying compile queue on process completion."
       (let* ((execution (buffer-local-value 'compile-queue--execution buffer))
              (status-code (compile-queue--status-code-for-process process status))
              (queue (-some-> (compile-queue-current process)))
-             (is-target (eq execution
-                            (-some-> queue compile-queue-execution)))
+             (is-target (compile-queue-execution-eq-id
+                         execution
+                         (-some-> queue compile-queue-execution)))
              (killed (not (eq status-code 0))))
         (when execution (setf (compile-queue-execution-status-code execution) status-code))
         (when is-target
           (setf (compile-queue-execution queue) nil)
-          (if killed (compile-queue-clean queue t)))
+          (when killed (compile-queue-clean queue)))
         (-some-->
             (-some-> execution
               compile-queue-execution-promise
@@ -597,7 +595,7 @@ Handles notifying compile queue on process completion."
 
 (defun compile-queue--forward-change (beg end length)
   "After change function that handles forwarding an execution buffer to its corresponding compile-queue buffer."
-  (when (eq compile-queue--execution (compile-queue-execution compile-queue))
+  (when (compile-queue-execution-eq-id compile-queue--execution (compile-queue-execution compile-queue))
     (let ((text (buffer-substring beg end)))
       (set-buffer (compile-queue--buffer-name compile-queue))
       (goto-char beg)
@@ -606,7 +604,7 @@ Handles notifying compile queue on process completion."
         (insert text)))))
 
 (defun compile-queue--status-code-for-process (process status)
-  "return the STATUS from PROCESS as a status code"
+  "Return the STATUS from PROCESS as a status code."
   (pcase (process-status process)
     ((or 'exit 'signal 'failed)
      (pcase (s-trim status)
@@ -615,6 +613,11 @@ Handles notifying compile queue on process completion."
         (string-to-number code))
        (_ nil)))
     (_ nil)))
+
+(defun compile-queue-execution-eq-id (lhs rhs)
+  "Return true if LHS id == rhs id."
+  (string= (-some-> lhs compile-queue-execution-id)
+           (-some-> rhs compile-queue-execution-id)))
 
 (define-derived-mode compile-queue-mode fundamental-mode "Compile-Queue"
   "Mode for mirroring the output of the current queue's execution's compile buffer."

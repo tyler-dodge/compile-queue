@@ -145,7 +145,8 @@
           :after-complete
           (lambda (buffer)
             (should (eq index 2))
-            (setq index (1+ index)))
+            (setq index (1+ index))
+            (funcall done))
           "echo 3")
 
         (shell
@@ -153,10 +154,7 @@
          (lambda (buffer)
            (should (eq index 1))
            (setq index (1+ index)))
-         "echo 2"))
-      (deferred:nextc it
-        (lambda (buffer)
-          (funcall done))))))
+         "echo 2")))))
 
 (ert-deftest-async compile-queue-should-handle-setting-major-mode (done)
   "compile-queue should handle setting the major mode"
@@ -186,7 +184,8 @@
            (set-buffer buffer)
            (should (eq index 3))
            (setq index (1+ index))
-           (should (eq "A" (s-trim (buffer-string)))))
+           (should (string= "A" (s-trim (buffer-string))))
+           (funcall done))
          :major-mode #'fundamental-mode
          :matcher (lambda (_) t)
          "echo A; sleep 2")
@@ -196,7 +195,7 @@
             (set-buffer buffer)
             (should (eq index 1))
             (setq index (1+ index))
-            (should (eq "B" (s-trim (buffer-string)))))
+            (should (string= "B" (s-trim (buffer-string)))))
           :major-mode #'fundamental-mode
           :matcher (lambda (_) t)
           "echo B; sleep 1")
@@ -208,12 +207,33 @@
            (set-buffer buffer)
            (should (eq index 2))
            (setq index (1+ index))
-           (should (eq "C" (s-trim (buffer-string)))))
+           (should (string= "C" (s-trim (buffer-string)))))
          "echo C; sleep 1.5"))
       (deferred:nextc it
         (lambda (buffer)
+          (set-buffer buffer)
           (should (eq index 0))
-          (setq index (1+ index))
-          (funcall done))))))
+          (setq index (1+ index)))))))
+
+(ert-deftest-async compile-queue-clean (after-complete)
+  "compile-queue-clean should work correctly"
+  (let* ((queue-name "queue")
+         (queue (compile-queue-current queue-name)))
+    (compile-queue:$
+      queue-name
+      (shell
+       :after-complete
+       (lambda (buffer)
+         (funcall after-complete))
+       :major-mode #'fundamental-mode
+       "echo A; sleep 2")
+      (shell
+       :major-mode #'fundamental-mode
+       "echo A; sleep 2"))
+    (should (compile-queue-execution queue))
+    (should (compile-queue-scheduled queue))
+    (compile-queue-clean queue)
+    (should-not (compile-queue-execution queue))
+    (should-not (compile-queue-scheduled queue))))
 
 (provide 'compile-queue-test)
