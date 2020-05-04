@@ -96,13 +96,16 @@
   command
   deferred)
 
-(cl-defstruct (compile-queue-shell-command (:constructor compile-queue-shell-command-create )
+(cl-defstruct (compile-queue-shell-command (:constructor compile-queue-shell-command-create)
                                            (:include compile-queue-command))
   command
   env
   major-mode
   default-directory
   buffer-name)
+
+;; Do not want the symbolp validation that is created by default
+(put 'compile-queue-shell-command-create 'compiler-macro nil)
 
 (defalias 'c:$ 'compile-queue:$)
 (defmacro compile-queue:$ (queue-name &rest commands)
@@ -138,17 +141,17 @@ Example:
 
 This example shows how compile-queue can be chained with deferred.el.
 "
-(declare (debug t)
-         (indent 0))
-(let* ((queue-name-is-queue (stringp queue-name))
-       (queue-var (make-symbol "queue"))
-       (commands (->> (if queue-name-is-queue commands (append (list queue-name) commands))
-                      (--map (compile-queue:$-command queue-var it)))))
-  `(let* ((,queue-var
-           (compile-queue--by-name ,(if queue-name-is-queue queue-name compile-queue-root-queue)))
-          (it nil))
-     ,@(-drop-last 1 commands)
-     (prog1 ,@(last commands)))))
+  (declare (debug t)
+           (indent 0))
+  (let* ((queue-name-is-queue (stringp queue-name))
+         (queue-var (make-symbol "queue"))
+         (commands (->> (if queue-name-is-queue commands (append (list queue-name) commands))
+                        (--map (compile-queue:$-command queue-var it)))))
+    `(let* ((,queue-var
+             (compile-queue--by-name ,(if queue-name-is-queue queue-name compile-queue-root-queue)))
+            (it nil))
+       ,@(->> (-drop-last 1 commands) (-map #'macroexpand))
+       (prog1 ,@(->> (last commands) (-map #'macroexpand))))))
 
 (defun compile-queue-clean (&optional queue skip-execution)
   "Cleans up QUEUE or the result of `compile-queue-current'.
@@ -212,9 +215,10 @@ Kills the current execution.
 (defun compile-queue:$--shell-command (list)
   (when (memq (car list) (list 'shell '!))
     (-let [(plist . command-rest) (compile-queue--split-plist (cdr list))]
-      `(compile-queue-shell-command-create ,@plist
-                                           :command
-                                           (s-join " " (list ,@command-rest))))))
+      `(compile-queue-shell-command-create
+        ,@plist
+        :command
+        (s-join " " (list ,@command-rest))))))
 
 
 (defun compile-queue--split-plist (plist)
@@ -276,8 +280,10 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
                          (list it)))))))
     `(let ,(append
             (->> vars (--map (list (car it) (cadr it))))
-            (->> vars (--map (when (caddr it) (list (cadr it) (caddr it))))
-                 (--filter it)))
+            )
+       ,@(->> vars (--map (when (caddr it) (list (cadr it) (caddr it))))
+              (--filter it)
+              (--map (cons (intern "setq") it)))
        (unwind-protect
            (progn ,@body)
          (progn
@@ -288,8 +294,6 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
   (let* ((command (compile-queue-promise-command promise))
          (buffer (compile-queue-shell-command--init-buffer command)))
     (set-buffer buffer)
-    (when (not (memq #'compile-queue--forward-change after-change-functions))
-      (setq-local after-change-functions (append (-some->> after-change-functions (-drop-last 1)) '(compile-queue--forward-change t))))
     (setq-local compile-queue queue)
     (let ((execution (compile-queue-execution-create
                       :buffer buffer
@@ -362,9 +366,9 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
           (set-window-buffer it new-buffer))
         (kill-buffer old-buffer))
       (set-buffer new-buffer)
-      (compile-queue-mode)
       (unless (string= buffer-name (buffer-name new-buffer))
         (rename-buffer buffer-name))
+      (compile-queue-mode)
       (goto-char (point-max)))))
 
 (defun compile-queue-current (&optional object)
@@ -395,13 +399,15 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
     (-some--> (get-buffer-process (current-buffer))
       (when (process-live-p it) (kill-process it)))
     (buffer-disable-undo)
-    (setq-local inhibit-read-only t)
     (let ((inhibit-read-only t))
       (erase-buffer))
 
     (funcall
      (or (compile-queue-shell-command-major-mode command)
          compile-queue-shell-default-major-mode))
+
+    (when (not (memq #'compile-queue--forward-change after-change-functions))
+      (setq-local after-change-functions (append (-some->> after-change-functions (-drop-last 1)) '(compile-queue--forward-change t))))
 
     (prog1 (get-buffer buffer-name)
       (when directory (setq-local default-directory directory))
@@ -477,10 +483,10 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
           (cond
            ((string= (buffer-substring beg (+ beg length)) rhs)
             (let ((inhibit-read-only t))
-              (delete-char length)))
+              (delete-char (- length))))
            ((string= (buffer-substring (- beg length) beg) lhs)
             (let ((inhibit-read-only t))
-              (delete-char (- length)))))))
+              (delete-char length))))))
     (let ((text (buffer-substring beg end)))
       (set-buffer (compile-queue--buffer-name compile-queue))
       (goto-char beg)
@@ -500,7 +506,7 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
 (define-derived-mode compile-queue-mode fundamental-mode "Compile-Queue"
   "Mode for mirroring the output of the current queue's execution's compile buffer."
   :group 'compile-queue
-  (setq-local buffer-read-only t))
+  (read-only-mode 1))
 
 (provide 'compile-queue)
 ;;; compile-queue.el ends here

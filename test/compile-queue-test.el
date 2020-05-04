@@ -43,7 +43,7 @@
       (deferred:nextc it
         (lambda (buffer)
           (should (string=
-                   "A\n\nProcess"
+                   "A\n\nProcess echo A finished"
                    (s-trim
                     (with-current-buffer buffer
                       (buffer-string)))))
@@ -157,6 +157,21 @@
         )
       (deferred:nextc it
         (lambda (buffer)
+          (funcall done))))))
+
+(ert-deftest-async compile-queue-should-handle-setting-major-mode (done)
+  "compile-queue should handle setting the major mode"
+  (compile-queue-clean)
+  (let* ((index 0))
+    (deferred:$
+      (compile-queue:$
+        (shell
+         :major-mode #'fundamental-mode
+         "sleep 1"))
+      (deferred:nextc it
+        (lambda (buffer)
+          (set-buffer buffer)
+          (set-buffer (compile-queue--buffer-name (compile-queue-current)))
           (funcall done))))))
 
 (provide 'compile-queue-test)
