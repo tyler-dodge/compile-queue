@@ -71,6 +71,7 @@
   "The execution that is related to the current buffer's process.")
 
 (cl-defstruct (compile-queue (:constructor compile-queue-create))
+  "Use `compile-queue-current' to get an instance of this type."
   (id (uuid-string))
   name
   buffer-name
@@ -78,6 +79,19 @@
   scheduled)
 
 (cl-defstruct (compile-queue-command (:constructor compile-queue-command-create))
+  "Base struct for Compile Commands.
+:before-start is a symbol or function that is called before an execution of this command
+It is called with the buffer to which the execution will output as the argument.
+
+:after-complete is a symbol or function that is called after the execution of this command completes.
+It is called with the buffer to which the execution outputted as the argument
+
+:name The name of the compile command
+
+:deferred The deferred object for the compile command.
+Represents the point in time after after-complete is called.
+If the compile command throws an error, an error is passed up the deferred chain.
+ "
   (id (uuid-string))
   name
   before-start
@@ -85,6 +99,10 @@
   after-complete)
 
 (cl-defstruct (compile-queue-execution (:constructor compile-queue-execution-create))
+  "Represents an individual execution of a `compile-queue-command'.
+`compile-queue-execution-buffer' is the buffer that the execution to which the execution outputs.
+`compile-queue-execution-queue' is the queue on which the buffer is being executed.
+"
   (id (uuid-string))
   promise
   buffer
@@ -92,12 +110,21 @@
   status-code)
 
 (cl-defstruct (compile-queue-promise (:constructor compile-queue-promise-create))
+  "Represents a command and a deferred object that represents the completion of an execution of the command"
   (id (uuid-string))
   command
   deferred)
 
 (cl-defstruct (compile-queue-shell-command (:constructor compile-queue-shell-command-create)
                                            (:include compile-queue-command))
+  "Represents a shell command.
+
+:command The shell command as an already escaped string
+:env A cons list of environment variables like ((\"KEY2\" . \"VALUE2\") (\"KEY2\" . \"VALUE2\"))
+:major-mode The major mode to use for the buffer that handles the output from the shell command
+:default-directory The default-directory to use when executing the shell command
+:buffer-name The name of the buffer that will handle the output from the shell command.
+If nil, it defaults to a truncated version of the command."
   command
   env
   major-mode
@@ -182,7 +209,10 @@ Kills the current execution.
 (defvar compile-queue--converters
   '(compile-queue:$--deferred-shell-command
     compile-queue:$--shell-command)
-  "Converters for `compile-queue:$'. Each are applied sequentially until one returns non-nil.")
+  "Converters for `compile-queue:$'. A converter receives a list and if it matches returns
+either a form that'll be evaluated to create a `compile-queue-command' or a list of the form (:deferred t :command FORM)
+where FORM is the form that would've been evaluated
+Each are applied sequentially until one returns non-nil.")
 
 (cl-defun compile-queue:$-convert (list)
   "Runs each of the converters in `compile-queue--converters' against LIST. Returns the first match."
@@ -192,20 +222,30 @@ Kills the current execution.
              (cl-return-from compile-queue:$-convert result))))
 
 (cl-defun compile-queue:$-command (queue-var command)
+  "Macro help for function for generating a link in the compile-queue:$ chain for COMMAND.
+Handles deferring if the converter returns a form (:deferred t :command).
+QUEUE-VAR is the symbol of a variable that points the queue name.
+"
   (if-let ((output-command (compile-queue:$-convert command)))
-      (if  (plist-get output-command :deferred)
-          `(setq it (deferred:nextc it
-                      (lambda (&rest arg)
-                        (compile-queue-schedule
-                         ,queue-var
-                         (let ((it nil))
-                           ,(plist-get output-command :command))))))
+      (if (plist-member output-command :deferred)
+          (if (plist-get output-command :deferred)
+              `(setq it (deferred:nextc it
+                          (lambda (&rest arg)
+                            (compile-queue-schedule
+                             ,queue-var
+                             (let ((it nil))
+                               ,(plist-get output-command :command))))))
+            `(setq it (compile-queue-schedule
+                       ,queue-var
+                       (let ((it nil))
+                         ,(plist-get output-command :command)))))
         `(setq it (let ((it nil)) (compile-queue-schedule ,queue-var ,output-command))))
     `(setq it ,command)))
 
 
 
 (defun compile-queue:$--deferred-shell-command (list)
+  "The converter for `deferred-shell'"
   (when (memq (car list) '(deferred-shell !deferred))
     (list
      :deferred t
@@ -213,6 +253,7 @@ Kills the current execution.
      (compile-queue:$--shell-command (cons 'shell (cdr list))))))
 
 (defun compile-queue:$--shell-command (list)
+  "The converter for `shell'"
   (when (memq (car list) (list 'shell '!))
     (-let [(plist . command-rest) (compile-queue--split-plist (cdr list))]
       `(compile-queue-shell-command-create
@@ -248,18 +289,26 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
     (cons output-plist command-rest)))
 
 (defun compile-queue--by-name (name)
+  "Finds or creates and registers the queue with NAME.
+Returns a `compile-queue' struct"
   (if (compile-queue-p name) name
     (or (ht-get compile-queue--name-map name)
         (--doto (compile-queue-create :name name)
           (ht-set! compile-queue--name-map name it)))))
 
 (defun compile-queue--callback (execution)
+  "Returns a callback that expects a function or a symbol that
+takes the execution's buffer as an argument."
   (lambda (callback)
     (save-selected-window
       (save-mark-and-excursion
         (funcall callback (compile-queue-execution-buffer execution))))))
 
 (defmacro compile-queue--save-var-excursion (var-names &rest body)
+  "Binds the variables globally in VAR-NAMES and resets them to their original values
+once BODY returns.
+Accepts initial values for the var-names as well similar to `let' bindings.
+"
   (declare (indent 1))
   (let* ((var-names (if (symbolp var-names) (list var-names) var-names))
          (vars
@@ -343,35 +392,43 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
     promise))
 
 (defun compile-queue--buffer-name (queue)
+  "Return the buffer name of the QUEUE.
+Uses the `compile-queue-name' if `compile-queue-buffer-name' is unset."
   (or (compile-queue-buffer-name queue)
       (-some--> (compile-queue-name queue) (concat "*" it "*"))
       (user-error "Broken queue with no name: %S" queue)))
 
 (defun compile-queue-execution--buffer-name (execution)
-  (let ((command (compile-queue-promise-command
-                  (compile-queue-execution-promise execution))))
-    (pcase command
-      ((cl-struct compile-queue-shell-command)
-       (compile-queue-shell-command--buffer-name command)))))
+  "Return the buffer name of the QUEUE.
+Uses the live buffer if it is set. Otherwise falls back to the buffer-name
+defined by `compile-queue--buffer-name'
 
+Uses the `compile-queue-name' if `compile-queue-buffer-name' is unset."
+  (or (-some--> (compile-queue-execution-buffer execution)
+        (when (buffer-live-p it) it)
+        (buffer-name it))
+      (let ((command (compile-queue-promise-command
+                      (compile-queue-execution-promise execution))))
+        (pcase command
+          ((cl-struct compile-queue-shell-command)
+           (compile-queue-shell-command--buffer-name command))))))
 
 (defun compile-queue--update-buffer (queue)
+  "Update the target view buffer of the QUEUE."
   (when-let ((execution-buffer (-> queue compile-queue-execution compile-queue-execution-buffer)))
     (let* ((buffer-name (compile-queue--buffer-name queue))
-           (old-buffer (get-buffer buffer-name))
-           (windows (get-buffer-window-list old-buffer))
-           (new-buffer (generate-new-buffer " *temp-queue*")))
-      (when old-buffer
-        (--each windows
-          (set-window-buffer it new-buffer))
-        (kill-buffer old-buffer))
-      (set-buffer new-buffer)
-      (unless (string= buffer-name (buffer-name new-buffer))
-        (rename-buffer buffer-name))
+           (buffer (or (get-buffer buffer-name) (generate-new-buffer buffer-name))))
+      (set-buffer buffer)
       (compile-queue-mode)
+      (let ((inhibit-read-only t))
+        (erase-buffer))
       (goto-char (point-max)))))
 
 (defun compile-queue-current (&optional object)
+  "Return the compile queue for the given OBJECT.
+OBJECT can be either a process, buffer, or window.
+If OBJECT is nil, return the value of `compile-queue' for the current buffer.
+"
   (pcase object
     ((pred processp) (buffer-local-value 'compile-queue (process-buffer object)))
     ((pred bufferp) (buffer-local-value 'compile-queue object))
@@ -380,17 +437,30 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
     (_ (error "Unexpected type passed to compile-queue-current %s" object))))
 
 (defun compile-queue-shell-command--buffer-name (command)
+  "Return the buffer name of the execution buffer for COMMAND.
+return `compile-queue-shell-command-buffer-name' if available.
+If `compile-queue-shell-command-name' is set, return *`compile-queue-shell-command-name'*.
+Otherwise return the command's string truncated.
+"
   (or (compile-queue-shell-command-buffer-name command)
       (-some--> (compile-queue-shell-command-name command) (concat " *" it "*"))
       (concat " *" (s-truncate 10 (compile-queue-shell-command-command command)) "*")))
 
 (defun compile-queue-shell-command--name (command)
-  (or (compile-queue-shell-command-buffer-name command)
-      (compile-queue-shell-command-name command)
+  "Return the name of COMMAND.
+return `compile-queue-shell-command-buffer-name' if available.
+If `compile-queue-shell-command-buffer-name' is set, return
+`compile-queue-shell-command-buffer-name' instead.
+
+Otherwise return the command's string truncated.
+"
+  (or (compile-queue-shell-command-name command)
+      (compile-queue-shell-command-buffer-name command)
       (concat (s-truncate 10 (compile-queue-shell-command-command command)))))
 
 (defun compile-queue-shell-command--init-buffer (command)
-  "Initialize the buffer for the execution. Replaces the buffer if it already exists."
+  "Initialize the buffer COMMAND which is a `compile-queue-shell-command'.
+Replaces the buffer if it already exists."
   (pcase-let* (((cl-struct compile-queue-shell-command (default-directory directory)) command)
                (buffer-name (compile-queue-shell-command--buffer-name command)))
     (unless (get-buffer buffer-name) (generate-new-buffer buffer-name))
@@ -414,6 +484,9 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
       (goto-char (point-max)))))
 
 (defun compile-queue-shell-command--process-filter (process output)
+  "Process filter for compile queue that handles delegating to the original process filter.
+Also, manages scolling windows to the end if the point is currently set at point-max.
+"
   (let* ((execution-buffer (process-buffer process))
          (compile-queue (compile-queue-current process))
          (compile-queue-buffer (-some-> compile-queue compile-queue--buffer-name get-buffer))
@@ -441,7 +514,9 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
                    (point))))))))))
 
 (defun compile-queue-shell-command--process-sentinel (process status)
-  "Delegating sentinel for compile-queue. Handles notifying compile queue on process completion."
+  "Delegating sentinel for compile-queue.
+Delegates to the `process-sentinel' except when the `process-sentinel' is the default.
+Handles notifying compile queue on process completion."
   (let* ((buffer (-some-> process
                    compile-queue-current
                    compile-queue-execution
@@ -480,6 +555,7 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
           (when (not killed) (compile-queue-execute queue)))))))
 
 (defun compile-queue--forward-change (beg end length)
+  "After change function that handles forwarding an execution buffer to its corresponding compile-queue buffer."
   (when (eq compile-queue--execution (compile-queue-execution compile-queue))
     (let ((text (buffer-substring beg end)))
       (set-buffer (compile-queue--buffer-name compile-queue))
@@ -489,6 +565,7 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
         (insert text)))))
 
 (defun compile-queue--status-code-for-process (process status)
+  "return the STATUS from PROCESS as a status code"
   (pcase (process-status process)
     ((or 'exit 'signal 'failed)
      (pcase (s-trim status)

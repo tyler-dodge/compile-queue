@@ -166,7 +166,7 @@
       (compile-queue:$
         (shell
          :major-mode #'fundamental-mode
-         "sleep 1"))
+         "echo test"))
       (deferred:nextc it
         (lambda (buffer)
           (set-buffer buffer)
