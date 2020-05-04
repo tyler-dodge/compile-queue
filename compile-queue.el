@@ -69,7 +69,8 @@
 (defvar-local compile-queue--execution nil
   "The execution that is related to the current buffer's process.")
 
-(cl-defstruct (compile-queue (:constructor compile-queue-create))
+(cl-defstruct (compile-queue (:constructor compile-queue-create)
+                             (:copier compile-queue-copy))
   "Use `compile-queue-current' to get an instance of this type."
   (id (uuid-string))
   name
@@ -77,7 +78,8 @@
   execution
   scheduled)
 
-(cl-defstruct (compile-queue-command (:constructor compile-queue-command-create))
+(cl-defstruct (compile-queue-command (:constructor compile-queue-command-create)
+                                     (:copier compile-queue-command-copy))
   "Base struct for Compile Commands.
 :before-start is a symbol or function that is called before an execution of this command
 It is called with the buffer to which the execution will output as the argument.
@@ -113,7 +115,8 @@ If the compile command throws an error, an error is passed up the deferred chain
   deferred
   after-complete)
 
-(cl-defstruct (compile-queue-execution (:constructor compile-queue-execution-create))
+(cl-defstruct (compile-queue-execution (:constructor compile-queue-execution-create)
+                                       (:copier compile-queue-execution-copy))
   "Represents an individual execution of a `compile-queue-command'.
 `compile-queue-execution-buffer' is the buffer that the execution to which the execution outputs.
 `compile-queue-execution-queue' is the queue on which the buffer is being executed.
@@ -124,13 +127,15 @@ If the compile command throws an error, an error is passed up the deferred chain
   queue
   status-code)
 
-(cl-defstruct (compile-queue-promise (:constructor compile-queue-promise-create))
+(cl-defstruct (compile-queue-promise (:constructor compile-queue-promise-create)
+                                     (:copier compile-queue-promise-copy))
   "Represents a command and a deferred object that represents the completion of an execution of the command"
   (id (uuid-string))
   command
   deferred)
 
 (cl-defstruct (compile-queue-shell-command (:constructor compile-queue-shell-command-create)
+                                           (:copier compile-queue-shell-command-copy)
                                            (:include compile-queue-command))
   "Represents a shell command.
 
