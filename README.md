@@ -25,11 +25,13 @@ QUEUE-NAME is optional.
 Currently there are 2 special types
 
 (shell &rest COMMAND)
+
 (! &rest COMMAND) - run the command specified by joining
 the list of COMMAND with spaces
 
 
 (deferred-shell &rest COMMAND)
+
 (!deferred &rest COMMAND) - waits to schedule the command
 until the deferred chain before this has already completed.
 
