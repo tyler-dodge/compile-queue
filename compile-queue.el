@@ -35,7 +35,7 @@
 (require 'deferred)
 (require 's)
 (require 'rx)
-
+(require 'comint)
 (declare-function org-runbook--validate-command "ext:org-runbook.el" (command))
 (declare-function org-runbook-command-name "ext:org-runbook.el" (command))
 (declare-function org-runbook-command-full-command "ext:org-runbook.el" (command))
@@ -69,8 +69,8 @@ Set to nil to disable garbage collection."
 
 
 (defcustom compile-queue-shell-default-major-mode
-  #'fundamental-mode
-  "The `major-mode' used in the compile-queue buffer if the `compile-queue-command' does not specify a queue."
+  #'comint-mode
+  "The `major-mode' used in the compile-queue buffer if the `compile-queue-command' does not specify a `major-mode'."
   :safe t
   :type 'functionp
   :group 'compile-queue)
@@ -424,6 +424,7 @@ Ex: `(shell :env ((KEY . nil))'.  %S" env))
                        (error "Env Key should resolve to a string .  Found: %s.  Cons: %s.  List %s" (car it) it (quote ,list)))
                      (unless (or (stringp (cdr it)) (not (cdr it)))
                        (error "Env Value should resolve to a string .  Found: %s.  Cons: %s.  List %s" (cdr it) it (quote ,list)))))))
+        ,@(unless (ht-get plist-ht :default-directory) (list :default-directory default-directory))
         ,@(ht->plist plist-ht)
         :matcher ,(cond
                    ((or (not matcher)
@@ -553,15 +554,24 @@ Accepts initial values for the var-names as well similar to `let' bindings."
         (setf (compile-queue-execution queue) execution)
         (-some--> (compile-queue-command-before-start command)
           (funcall (compile-queue--callback execution) it))
-        (let ((process
-               (compile-queue--save-var-excursion (process-environment)
-                 (--each (compile-queue-shell-command-env command)
-                   (add-to-list 'process-environment (concat (car it) "="
-                                                             (cdr it))))
-                 (start-process-shell-command
-                  (compile-queue-shell-command--name command)
-                  (compile-queue-shell-command--buffer-name command)
-                  (compile-queue-shell-command--command command)))))
+        (let* (
+               (buffer-name (compile-queue-shell-command--buffer-name command))
+               (process
+                (compile-queue--save-var-excursion (process-environment)
+                  (--each (compile-queue-shell-command-env command)
+                    (add-to-list 'process-environment (concat (car it) "="
+                                                              (cdr it))))
+                  (start-process-shell-command
+                   (compile-queue-shell-command--name command)
+                   buffer-name
+                   (compile-queue-shell-command--command command)))))
+
+          (when (derived-mode-p #'comint-mode)
+            (goto-char (point-min))
+            (set-marker (process-mark process) (point))
+            (setq-local comint-last-output-start (make-marker))
+            (set-marker comint-last-output-start (point))
+            (set-process-filter process #'comint-output-filter))
           (setf (compile-queue-execution-process execution) process)
           (setf (compile-queue-execution-buffer execution) buffer)
           (--doto process
@@ -685,11 +695,11 @@ Replaces the text at BEG with LENGTH with the text between BEG and END
 from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
   (when (compile-queue-execution-eq-id compile-queue-delegate-mode--execution (compile-queue-execution compile-queue-delegate-mode--queue))
     (let ((text (buffer-substring beg end)))
-      (set-buffer (compile-queue--buffer-name compile-queue-delegate-mode--queue))
-      (goto-char beg)
-      (delete-char length)
-      (let ((inhibit-read-only t))
-        (insert text)))))
+      (with-current-buffer (compile-queue--buffer-name compile-queue-delegate-mode--queue)
+        (goto-char beg)
+        (delete-char length)
+        (let ((inhibit-read-only t))
+          (insert text))))))
 
 (defun compile-queue-delegate-mode--status-code-for-process (process status)
   "Return the STATUS from PROCESS as a status code."
@@ -783,7 +793,8 @@ is currently set at `point-max'."
                              (--filter (eq (window-point it) compile-queue-end-pt))))
          (execution (buffer-local-value 'compile-queue-delegate-mode--execution process-buffer))
          (start (marker-position (process-mark process))))
-    (-some--> delegate (funcall it process output))
+    (-some--> delegate (progn
+                         (funcall it process output)))
     (when-let ((matcher (-some-> execution
                           compile-queue-execution-promise
                           compile-queue-promise-command
@@ -845,8 +856,8 @@ Handles notifying compile queue the process STATUS on completion."
              (queue (-some-> (compile-queue-current process)))
              (is-target (when execution
                           (compile-queue-execution-eq-id
-                                         execution
-                                         (-some-> queue compile-queue-execution))))
+                           execution
+                           (-some-> queue compile-queue-execution))))
              (non-zero-exit (not (eq status-code 0))))
         (when execution (setf (compile-queue-execution-status-code execution) status-code))
         (when is-target
@@ -862,7 +873,7 @@ Handles notifying compile queue the process STATUS on completion."
                 (-some--> execution
                   (compile-queue-execution-promise it)
                   (compile-queue-promise-deferred it)
-                  (when (not (deferred:status it)) (deferred:errorback it (string-trim status))))
+                  (unless (deferred:status it) (deferred:errorback it (string-trim status))))
               (-some--> execution
                 (compile-queue-execution-promise it)
                 (compile-queue-promise-deferred it)
