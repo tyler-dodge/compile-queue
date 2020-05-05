@@ -47,6 +47,13 @@
   :type 'stringp
   :group 'compile-queue)
 
+(defcustom compile-queue-mode-line-format
+  '(" %b" " - " (:eval (or (compile-queue-mode--mode-line-command-name) "")) " " (:eval (compile-queue-mode--mode-line-scheduled)))
+  "The `mode-line-format' used by the queue buffer."
+  :safe t
+  :type 'stringp
+  :group 'compile-queue)
+
 
 (defcustom compile-queue-garbage-collect-time
   10.0
@@ -270,7 +277,17 @@ This example shows how compile-queue can be chained with deferred.el."
   "Cleans every known queue."
   (interactive)
   (->> (ht-values compile-queue--name-ht)
-      (-map #'compile-queue-clean)))
+       (-map #'compile-queue-clean)))
+
+(defun compile-queue-skip (&optional queue)
+  "Skip waiting for the current execution on QUEUE.
+Start the next execution if one is available.
+If nothing is scheduled, this is a no-op."
+  (interactive)
+  (let ((queue (or queue (compile-queue-current) (compile-queue--by-name compile-queue-root-queue))))
+    (when (compile-queue-scheduled queue)
+      (setf (compile-queue-execution queue) nil)
+      (compile-queue-execute queue))))
 
 (defun compile-queue-clean (&optional queue)
   "Cleans up QUEUE or the result of `compile-queue-current'.
@@ -433,6 +450,7 @@ Ex: `(shell :env ((KEY . nil))'.  %S" env))
                                 (concat "[" it "]"))))
               (org-runbook-command-full-command it)
               (compile-queue-shell-command-create
+               ,@(unless (plist-get plist :name) (list :name 'command-name))
                ,@plist
                :command it))))))
 
@@ -587,9 +605,12 @@ Uses the `compile-queue-name' if `compile-queue-buffer-name' is unset."
            (buffer (or (get-buffer buffer-name) (generate-new-buffer buffer-name))))
       (set-buffer buffer)
       (compile-queue-mode)
+      (setq-local compile-queue-delegate-mode--queue queue)
       (let ((inhibit-read-only t))
         (erase-buffer))
-      (goto-char (point-max)))))
+      (goto-char (point-max)))
+    (force-mode-line-update)))
+
 
 (defun compile-queue-current (&optional object)
   "Return the compile queue for the given OBJECT.
@@ -685,7 +706,34 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
 (define-derived-mode compile-queue-mode special-mode "Compile-Queue"
   "Mode for mirroring the output of the current queue's execution's compile buffer."
   :group 'compile-queue
+  (when compile-queue-mode-line-format
+    (setq-local mode-line-format compile-queue-mode-line-format))
   (setq-local buffer-read-only t))
+
+(defun compile-queue-mode--mode-line-command-name ()
+  "Return the command name for the current execution for the mode line."
+  (let* ((execution (-some-> (compile-queue-current)
+                      compile-queue-execution))
+         (command  (-some-> execution compile-queue-execution-promise
+                            compile-queue-promise-command)))
+    (or
+     (-some-> command compile-queue-command-name)
+     (-some-> execution compile-queue-execution-buffer buffer-name)
+     (when (compile-queue-shell-command-p command) (-some-> command compile-queue-shell-command--command)))))
+
+(defun compile-queue-mode--mode-line-scheduled ()
+  "Return the scheduled command names for the mode line."
+  (let* ((scheduled (-some-> (compile-queue-current)
+                      compile-queue-scheduled)))
+
+    (-some--> scheduled
+      (--map
+       (let ((command (->> it (compile-queue-promise-command))))
+         (or (compile-queue-command-name command)
+             (when (compile-queue-shell-command-p command) (-some-> command compile-queue-shell-command--command))))
+       it)
+      (s-join ", " it)
+      (concat "[" it "]"))))
 
 (define-minor-mode compile-queue-delegate-mode
   "Minor mode for buffers that delegate to the compile-queue."
