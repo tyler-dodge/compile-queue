@@ -23,6 +23,8 @@ QUEUE-NAME is optional.
 
 Currently there are 3 special types
 
+(deferred-org-runbook &rest COMMAND)
+(>deferred &rest COMMAND)
 (org-runbook &rest COMMAND)
 (> &rest COMMAND) - run the command by matching the first org-runbook command that matches
 COMMAND concatenated with >>.

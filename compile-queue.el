@@ -200,7 +200,8 @@ the list of COMMAND with spaces
 until the deferred chain before this has already completed.
 See `compile-queue-shell-command' for keywords
 
-
+`(deferred-org-runbook &rest COMMAND)'
+`(>deferred &rest COMMAND)'
 `(org-runbook &rest COMMAND)'
 `(> &rest COMMAND)' - run the command by matching the first
 org-runbook command that matches COMMAND concatenated with >>.
@@ -295,6 +296,7 @@ Kills the current execution."
 (defvar compile-queue--converters
   '(compile-queue-$--deferred-shell-command
     compile-queue-$--shell-command
+    compile-queue-$--deferred-org-runbook-command
     compile-queue-$--org-runbook-command)
   "Converters for `compile-queue-$'.
 A converter receives a list and if it matches return either a form
@@ -342,6 +344,14 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
      :deferred t
      :command
      (compile-queue-$--shell-command (cons 'shell (cdr list))))))
+
+(defun compile-queue-$--deferred-org-runbook-command (list)
+  "Return `deferred-shell' if LIST match."
+  (when (memq (car list) '(deferred-org-runbook >deferred))
+    (list
+     :deferred t
+     :command
+     (compile-queue-$--org-runbook-command (cons 'org-runbook (cdr list))))))
 
 (defun compile-queue-$--shell-env-ambiguous (env)
   "Return non-nil if ENV is ambiguous."
