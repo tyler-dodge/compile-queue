@@ -1,4 +1,4 @@
-;;; compile-queue.el --- The package for running lists of commands, while viewing their output. -*- lexical-binding: t -*-
+;;; compile-queue.el --- The package for running commands, while viewing their output -*- lexical-binding: t -*-
 
 ;; Author: Tyler Dodge
 ;; Version: 1.0
