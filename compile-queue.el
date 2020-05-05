@@ -1,7 +1,7 @@
-;;; compile-queue.el --- Org mode for runbooks -*- lexical-binding: t -*-
+;;; compile-queue.el --- The package for running lists of commands, while viewing their output. -*- lexical-binding: t -*-
 
 ;; Author: Tyler Dodge
-;; Version: 0.1
+;; Version: 1.0
 ;; Keywords: convenience, processes, terminals, files
 ;; Package-Requires: ((emacs "26.2") (uuid "0.0.3") (dash "2.17.0") (deferred "0.5.1") (s "1.12.0") (ht "2.3"))
 ;; URL: https://github.com/tyler-dodge/compile-queue
@@ -23,7 +23,7 @@
 ;;;
 ;;; Commentary:
 ;; The package for running lists of commands, while viewing their output.
-;; Main entrypoint is meant to be the `compile-queue:-$' macro
+;; Main entrypoint is meant to be the `compile-queue-$' macro
 ;;
 ;;; Code:
 
@@ -47,6 +47,16 @@
   :type 'stringp
   :group 'compile-queue)
 
+
+(defcustom compile-queue-garbage-collect-time
+  10.0
+  "Time in seconds before the buffer is garbage collected automatically.
+Set to nil to disable garbage collection."
+  :safe t
+  :type 'numberp
+  :group 'compile-queue)
+
+
 (defcustom compile-queue-shell-default-major-mode
   #'fundamental-mode
   "The `major-mode' used in the compile-queue buffer if the `compile-queue-command' does not specify a queue."
@@ -55,19 +65,27 @@
   :group 'compile-queue)
 
 (defvar compile-queue--name-ht (ht)
-  "Map from compile-queue name to the corresponding compile-queue struct.")
+  "Hash table from compile-queue name to the corresponding compile-queue struct.")
 
-(defvar-local compile-queue-shell-command--process-filter-delegate nil
+(defvar-local compile-queue-delegate-mode--process-filter-delegate nil
   "The process filter that compile-queue delegates to while running.")
 
-(defvar-local compile-queue-shell-command--process-sentinel-delegate nil
+(defvar-local compile-queue-delegate-mode--process-sentinel-delegate nil
   "The process sentinal that compile-queue delegates to while running.")
 
-(defvar-local compile-queue nil
+(defvar-local compile-queue-delegate-mode--queue nil
   "The compile-queue that the current buffer is referencing.")
 
-(defvar-local compile-queue--execution nil
+(defvar-local compile-queue-delegate-mode--gc-timer nil
+  "The timer for cleaning up the current buffer after the process completes.")
+
+(defvar-local compile-queue-delegate-mode--execution nil
   "The execution that is related to the current buffer's process.")
+
+(defvar-local compile-queue-delegate-mode--matcher-disabled nil
+  "When non-nil, disable the current execution's matcher.
+Set automatically if the matcher throws an error.")
+
 
 (cl-defstruct (compile-queue (:constructor compile-queue-create)
                              (:copier compile-queue-copy))
@@ -99,6 +117,10 @@ expands to
 :matcher can also either by a symbol, or a list that starts with lambda.
 so (:matcher #'match-function) and (:matcher (lambda (text) t)) are valid matchers.
 
+:keep-buffer can either be nil or non-nil.
+If non-nil: No garbage collection happens.
+If nil: The buffer gets removed after completion.
+
 It is called with a string containing the text being added to the buffer.
 The current buffer is also set to the execution buffer of the command,
 with the point set to the start of the current modification.
@@ -112,6 +134,7 @@ If the compile command throws an error, an error is passed up the deferred chain
   name
   before-start
   matcher
+  keep-buffer
   deferred
   after-complete)
 
@@ -124,6 +147,7 @@ If the compile command throws an error, an error is passed up the deferred chain
   (id (uuid-string))
   promise
   buffer
+  process
   queue
   status-code)
 
@@ -176,15 +200,45 @@ the list of COMMAND with spaces
 until the deferred chain before this has already completed.
 See `compile-queue-shell-command' for keywords
 
+
+`(org-runbook &rest COMMAND)'
+`(> &rest COMMAND)' - run the command by matching the first
+org-runbook command that matches COMMAND concatenated with >>.
+For instance, given
+
+```
+* A
+** A1
+#+BEGIN_SRC shell-queue
+echo A
+#+END_SRC
+* B
+* B2
+```
+
+
+`(org-runbook \"A >> A1\")'
+
+`(org-runbook \"A\" \"A1\")'
+
+
+both resolve to the command
+
+```
+echo A
+```
+
+
+
 The deferred promise receives the output buffer as the argument
 once the execution completes.
 
 
 Example:
 `(compile-queue-$
-  (shell \"echo A\")
-  (deferred-shell \"echo C\")
-  (shell \"echo B\"))'
+   (shell \"echo A\")
+   (deferred-shell \"echo C\")
+   (shell \"echo B\"))'
 
 This example will end up displaying C because the command \"echo C\"
 is not scheduled until after \"echo A\" finishes execution
@@ -192,11 +246,11 @@ whereas \"echo B\" is scheduled before \"echo B\" starts executing.
 
 Example:
 `(compile-queue-$
-  (shell \"echo A\")
-  (deferred:nextc it
-    (lambda (buffer)
-      (set-buffer buffer)
-      (message \"%s\" (s-trim (buffer-string))))))'
+   (shell \"echo A\")
+   (deferred:nextc it
+     (lambda (buffer)
+       (set-buffer buffer)
+       (message \"%s\" (string-trim (buffer-string))))))'
 
 This example shows how compile-queue can be chained with deferred.el."
   (declare (debug t)
@@ -211,12 +265,18 @@ This example shows how compile-queue can be chained with deferred.el."
        ,@(->> (-drop-last 1 commands) (-map #'macroexpand))
        (prog1 ,@(->> (last commands) (-map #'macroexpand))))))
 
+(defun compile-queue-clean-all ()
+  "Cleans every known queue."
+  (interactive)
+  (->> (ht-values compile-queue--name-ht)
+      (-map #'compile-queue-clean)))
+
 (defun compile-queue-clean (&optional queue)
   "Cleans up QUEUE or the result of `compile-queue-current'.
 Kills the current execution."
   (interactive)
-  (when-let ((queue (or queue (or queue (compile-queue-current)
-                                  (compile-queue--by-name compile-queue-root-queue)))))
+  (when-let ((queue (or queue (compile-queue-current)
+                        (compile-queue--by-name compile-queue-root-queue))))
     (let ((process (-some-> queue compile-queue-execution compile-queue-execution-buffer get-buffer-process)))
       (when (process-live-p process)
         (kill-process process)))
@@ -234,7 +294,8 @@ Kills the current execution."
 
 (defvar compile-queue--converters
   '(compile-queue-$--deferred-shell-command
-    compile-queue-$--shell-command)
+    compile-queue-$--shell-command
+    compile-queue-$--org-runbook-command)
   "Converters for `compile-queue-$'.
 A converter receives a list and if it matches return either a form
 that'll be evaluated to create a `compile-queue-command' or a list
@@ -259,11 +320,12 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
       (if (plist-member output-command :deferred)
           (if (plist-get output-command :deferred)
               `(setq it (deferred:nextc it
-                          (lambda (&rest arg)
-                            (compile-queue-schedule
-                             ,queue-var
-                             (let ((it nil))
-                               ,(plist-get output-command :command))))))
+                          (lexical-let ((,queue-var ,queue-var))
+                            (lambda (&rest arg)
+                              (compile-queue-schedule
+                               ,queue-var
+                               (let ((it nil))
+                                 ,(plist-get output-command :command)))))))
             `(setq it (compile-queue-schedule
                        ,queue-var
                        (let ((it nil))
@@ -281,14 +343,55 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
      :command
      (compile-queue-$--shell-command (cons 'shell (cdr list))))))
 
+(defun compile-queue-$--shell-env-ambiguous (env)
+  "Return non-nil if ENV is ambiguous."
+  (pcase env
+    (`(((,_ . ,_) . ,_)) nil)
+    (`((,_ ,_ . ,_)) t)
+    (`((,_ . ,_)) nil)
+    (`(,_ . nil) t)))
+
+(defun compile-queue-$--shell-wrap-env (env)
+  "Return wrapped ENV if it is not a list."
+  (pcase env
+    ('nil nil)
+    (`((,_ . ,_) (,_ . ,_)) env)
+    (`(,_ . nil) env)
+    (`(,_ . ,_) (list env))
+    (_ env)))
+
 (defun compile-queue-$--shell-command (list)
   "Return `shell' if LIST match."
   (when (memq (car list) (list 'shell '!))
     (-let* (((plist . command-rest) (compile-queue--split-plist (cdr list)))
             (plist-ht (ht<-plist plist))
-            (matcher (plist-get plist :matcher)))
-      (when matcher (ht-remove! plist-ht :matcher))
+            (env (ht-get plist-ht :env))
+            (matcher (ht-get plist-ht :matcher)))
+      (when matcher (ht-remove plist-ht :matcher))
+      (when env (ht-remove plist-ht :env))
       `(compile-queue-shell-command-create
+        :env ,(let ((env (if (and (consp env) (not (cdr env))) env env)))
+                `(->>
+                  ,(cond
+                    ((not env) nil)
+                    ((symbolp env)
+                     `(let ((result ,env))
+                        (compile-queue-$--shell-wrap-env result)))
+                    ((compile-queue-$--shell-env-ambiguous env)
+                     (error "Current structure is ambiguous.  Use full syntax to clear the ambiguity.
+Ex: `(shell :env ((KEY . nil))'.  %S" env))
+                    (t
+                     `(quote ,(compile-queue-$--shell-wrap-env env))))
+                  (--map (cons (eval (car it)) (eval (cdr it))))
+                  (-non-nil)
+                  (--map
+                   (prog1 it
+                     (unless (consp it)
+                       (error "Env should be either an alist or a cons.  Found: %s.  List %s" it (list ,list)))
+                     (unless (stringp (car it))
+                       (error "Env Key should resolve to a string .  Found: %s.  Cons: %s.  List %s" (car it) it (quote ,list)))
+                     (unless (or (stringp (cdr it)) (not (cdr it)))
+                       (error "Env Value should resolve to a string .  Found: %s.  Cons: %s.  List %s" (cdr it) it (quote ,list)))))))
         ,@(ht->plist plist-ht)
         :matcher ,(cond
                    ((or (not matcher)
@@ -298,6 +401,30 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
                    (t `(lambda (it) ,matcher)))
         :command
         (s-join " " (list ,@command-rest))))))
+
+
+(defun compile-queue-$--org-runbook-command (list)
+  "Schedule a runbook command if LIST is of the form (org-runbook &rest arg)."
+  (when (memq (car list) (list 'org-runbook '>))
+    (-let* (((plist . rest) (compile-queue--split-plist (cdr list))))
+      `(let* ((command-name (s-join " >> " (list ,@rest)))
+              (commands (->>
+                         (org-runbook-targets)
+                         (-map #'org-runbook-file-targets)
+                         (-flatten)
+                         (-map #'org-runbook--shell-command-for-target))))
+         (--> commands
+              (or (--first (string= command-name (org-runbook-command-name it)) it)
+                  (user-error "Unable to find runbook command named: %s.  Available Commands: %s"
+                              command-name
+                              (-some--> commands
+                                (-map #'org-runbook-command-name it)
+                                (s-join ", " it)
+                                (concat "[" it "]"))))
+              (org-runbook-command-full-command it)
+              (compile-queue-shell-command-create
+               ,@plist
+               :command it))))))
 
 (defun compile-queue--split-plist (plist)
   "Split PLIST into a cons cell (SUBPLIST . REST)
@@ -373,33 +500,43 @@ Accepts initial values for the var-names as well similar to `let' bindings."
          (progn
            ,@(->> vars (--map `(setq ,(cadr it) ,(car it)))))))))
 
+(defun compile-queue-shell-command--command (command)
+  "Return the full shell command for COMMAND."
+  (compile-queue-shell-command-command command))
+
 (defun compile-queue-command--execute (promise queue)
   "Execute PROMISE in a buffer related to QUEUE."
   (let* ((command (compile-queue-promise-command promise))
          (buffer (compile-queue-shell-command--init-buffer command)))
     (set-buffer buffer)
-    (setq-local compile-queue queue)
+    (setq-local compile-queue-delegate-mode--queue queue)
     (let ((execution (compile-queue-execution-create
                       :buffer buffer
                       :status-code nil
                       :promise promise
                       :queue queue)))
-      (setq-local compile-queue--execution execution)
+      (setq-local compile-queue-delegate-mode--execution execution)
       (prog1 execution
         (setf (compile-queue-execution queue) execution)
         (-some--> (compile-queue-command-before-start command)
           (funcall (compile-queue--callback execution) it))
-        (let ((process (start-process-shell-command
-                        (compile-queue-shell-command--name command)
-                        (compile-queue-shell-command--buffer-name command)
-                        (compile-queue-shell-command-command command))))
+        (let ((process
+               (compile-queue--save-var-excursion (process-environment)
+                 (--each (compile-queue-shell-command-env command)
+                   (add-to-list 'process-environment (concat (car it) "="
+                                                             (cdr it))))
+                 (start-process-shell-command
+                  (compile-queue-shell-command--name command)
+                  (compile-queue-shell-command--buffer-name command)
+                  (compile-queue-shell-command--command command)))))
+          (setf (compile-queue-execution-process execution) process)
           (setf (compile-queue-execution-buffer execution) buffer)
           (--doto process
             (when it
-              (setq-local compile-queue-shell-command--process-filter-delegate (process-filter it))
-              (setq-local compile-queue-shell-command--process-sentinel-delegate (process-sentinel it))
-              (set-process-sentinel it #'compile-queue-shell-command--process-sentinel)
-              (set-process-filter it #'compile-queue-shell-command--process-filter)))
+              (setq-local compile-queue-delegate-mode--process-filter-delegate (process-filter it))
+              (setq-local compile-queue-delegate-mode--process-sentinel-delegate (process-sentinel it))
+              (set-process-sentinel it #'compile-queue-delegate-mode--process-sentinel)
+              (set-process-filter it #'compile-queue-delegate-mode--process-filter)))
           (compile-queue--update-buffer queue))))))
 
 (defun compile-queue-execute (queue)
@@ -448,14 +585,14 @@ Uses the `compile-queue-name' if `compile-queue-buffer-name' is unset."
   "Return the compile queue for the given OBJECT.
 OBJECT can be either a process, buffer, or window.
 
-If OBJECT is nil, return the value of `compile-queue'
+If OBJECT is nil, return the value of `compile-queue-delegate-mode--queue'
 for the current buffer."
   (pcase object
-    ((pred processp) (buffer-local-value 'compile-queue (process-buffer object)))
-    ((pred bufferp) (buffer-local-value 'compile-queue object))
-    ((pred windowp) (buffer-local-value 'compile-queue object))
+    ((pred processp) (buffer-local-value 'compile-queue-delegate-mode--queue (process-buffer object)))
+    ((pred bufferp) (buffer-local-value 'compile-queue-delegate-mode--queue object))
+    ((pred windowp) (buffer-local-value 'compile-queue-delegate-mode--queue object))
     ((pred stringp) (compile-queue--by-name object))
-    ('nil (buffer-local-value 'compile-queue (current-buffer)))
+    ('nil (buffer-local-value 'compile-queue-delegate-mode--queue (current-buffer)))
     (_ (error "Unexpected type passed to compile-queue-current %s" object))))
 
 (defun compile-queue-shell-command--buffer-name (command)
@@ -468,7 +605,7 @@ return *`compile-queue-shell-command-name'*.
 Otherwise return the command's string truncated."
   (or (compile-queue-shell-command-buffer-name command)
       (-some--> (compile-queue-shell-command-name command) (concat " *" it "*"))
-      (concat " *" (s-truncate 20 (compile-queue-shell-command-command command)) "*")))
+      (concat " *" (s-truncate 20 (compile-queue-shell-command--command command)) "*")))
 
 (defun compile-queue-shell-command--name (command)
   "Return the name of COMMAND.
@@ -479,7 +616,7 @@ If `compile-queue-shell-command-buffer-name' is set, return
 Otherwise return the command's string truncated."
   (or (compile-queue-shell-command-name command)
       (compile-queue-shell-command-buffer-name command)
-      (concat (s-truncate 10 (compile-queue-shell-command-command command)))))
+      (concat (s-truncate 10 (compile-queue-shell-command--command command)))))
 
 (defun compile-queue-shell-command--init-buffer (command)
   "Initialize the buffer COMMAND which is a `compile-queue-shell-command'.
@@ -494,19 +631,64 @@ Replaces the buffer if it already exists."
     (buffer-disable-undo)
     (let ((inhibit-read-only t))
       (erase-buffer))
-
+    (-some-> compile-queue-delegate-mode--gc-timer cancel-timer)
+    (setq-local compile-queue-delegate-mode--gc-timer nil)
     (funcall
      (or (compile-queue-shell-command-major-mode command)
          compile-queue-shell-default-major-mode))
 
-    (unless (memq #'compile-queue--forward-change after-change-functions)
-      (setq-local after-change-functions (append (-some->> after-change-functions (-drop-last 1)) '(compile-queue--forward-change t))))
+    (compile-queue-delegate-mode 1)
 
     (prog1 (get-buffer buffer-name)
       (when directory (setq-local default-directory directory))
       (goto-char (point-max)))))
 
-(defun compile-queue-shell-command--process-filter (process output)
+(defun compile-queue-delegate-mode--forward-change (beg end length)
+  "Forward change to the `compile-queue-delegate-mode--queue' buffer.
+Replaces the text at BEG with LENGTH with the text between BEG and END
+from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
+  (when (compile-queue-execution-eq-id compile-queue-delegate-mode--execution (compile-queue-execution compile-queue-delegate-mode--queue))
+    (let ((text (buffer-substring beg end)))
+      (set-buffer (compile-queue--buffer-name compile-queue-delegate-mode--queue))
+      (goto-char beg)
+      (delete-char length)
+      (let ((inhibit-read-only t))
+        (insert text)))))
+
+(defun compile-queue-delegate-mode--status-code-for-process (process status)
+  "Return the STATUS from PROCESS as a status code."
+  (pcase (process-status process)
+    ((or 'exit 'signal 'failed)
+     (pcase (s-trim status)
+       ("finished" 0)
+       ((rx line-start "exited abnormally with code" (* whitespace) (let code (* digit)))
+        (string-to-number code))
+       (_ nil)))
+    (_ nil)))
+
+(defun compile-queue-execution-eq-id (lhs rhs)
+  "Return non-nil if LHS id == RHS id."
+  (when (and lhs rhs)
+    (string= (-> lhs compile-queue-execution-id)
+             (-> rhs compile-queue-execution-id))))
+
+(define-derived-mode compile-queue-mode special-mode "Compile-Queue"
+  "Mode for mirroring the output of the current queue's execution's compile buffer."
+  :group 'compile-queue
+  (setq-local buffer-read-only t))
+
+(define-minor-mode compile-queue-delegate-mode
+  "Minor mode for buffers that delegate to the compile-queue."
+  :init-value nil
+  :lighter " compile-queue-delegate"
+  (if compile-queue-delegate-mode
+      (progn
+        (unless (memq 'compile-queue-delegate-mode--forward-change after-change-functions)
+          (setq-local after-change-functions
+                      (append (-some->> after-change-functions (-drop-last 1)) '(compile-queue-delegate-mode--forward-change t)))))
+    (setq-local after-change-functions (--filter (not (equal it #'compile-queue-delegate-mode--forward-change)) after-change-functions))))
+
+(defun compile-queue-delegate-mode--process-filter (process output)
   "Process filter that delegates OUTPUT to the original PROCESS filter.
 Also, manages scolling windows to the end if the point
 is currently set at `point-max'."
@@ -515,11 +697,11 @@ is currently set at `point-max'."
          (compile-queue-buffer (-some-> queue compile-queue--buffer-name get-buffer))
          (delegate
           (-some->> process-buffer
-            (buffer-local-value 'compile-queue-shell-command--process-filter-delegate)))
+            (buffer-local-value 'compile-queue-delegate-mode--process-filter-delegate)))
          (compile-queue-end-pt (with-current-buffer (process-buffer process) (point-max)))
          (scroll-to-end (->> (get-buffer-window-list compile-queue-buffer)
                              (--filter (eq (window-point it) compile-queue-end-pt))))
-         (execution (buffer-local-value 'compile-queue--execution process-buffer))
+         (execution (buffer-local-value 'compile-queue-delegate-mode--execution process-buffer))
          (start (marker-position (process-mark process))))
     (-some--> delegate (funcall it process output))
     (when-let ((matcher (-some-> execution
@@ -528,7 +710,17 @@ is currently set at `point-max'."
                           compile-queue-command-matcher)))
       (with-current-buffer process-buffer
         (goto-char start)
-        (when (funcall matcher output)
+        (when (and (not compile-queue-delegate-mode--matcher-disabled)
+                   (condition-case error
+                       (if (functionp matcher)
+                           (funcall matcher output)
+                         output)
+                     (error
+                      (setq-local compile-queue-delegate-mode--matcher-disabled t)
+                      (error "%s" (error-message-string error)))
+                     (user-error
+                      (setq-local compile-queue-delegate-mode--matcher-disabled t)
+                      (error "%s" (error-message-string error)))))
           (deferred:callback
             (-> execution
                 compile-queue-execution-promise
@@ -536,7 +728,7 @@ is currently set at `point-max'."
             (-> execution compile-queue-execution-buffer))
           (compile-queue-execute queue))))
 
-    (let* ((execution (buffer-local-value 'compile-queue--execution process-buffer)))
+    (let* ((execution (buffer-local-value 'compile-queue-delegate-mode--execution process-buffer)))
       (if (and execution (compile-queue-execution-eq-id
                           execution
                           (-some-> queue compile-queue-execution)))
@@ -552,7 +744,7 @@ is currently set at `point-max'."
                    (forward-line (floor (- (- (window-height it 'floor) 3))))
                    (point))))))))))
 
-(defun compile-queue-shell-command--process-sentinel (process status)
+(defun compile-queue-delegate-mode--process-sentinel (process status)
   "Delegating sentinel for compile-queue.
 Delegates to the original `process-sentinel' for PROCESS except
 when the `process-sentinel' is the default.
@@ -560,75 +752,60 @@ Handles notifying compile queue the process STATUS on completion."
   (let* ((buffer (process-buffer process))
          (delegate
           (-some->> buffer
-            (buffer-local-value 'compile-queue-shell-command--process-sentinel-delegate))))
+            (buffer-local-value 'compile-queue-delegate-mode--process-sentinel-delegate))))
     (unless (eq delegate #'internal-default-process-sentinel)
       (compile-queue--save-var-excursion ((inhibit-read-only t))
         (-some--> delegate (funcall it process status))))
 
     (unless (process-live-p process)
-      (let* ((execution (buffer-local-value 'compile-queue--execution buffer))
-             (status-code (compile-queue--status-code-for-process process status))
+      (let* ((execution (-some--> (buffer-local-value 'compile-queue-delegate-mode--execution buffer)
+                          (when (eq (compile-queue-execution-process it) process) it)))
+             (command (-some-> execution compile-queue-execution-promise compile-queue-promise-command))
+             (status-code (compile-queue-delegate-mode--status-code-for-process process status))
              (queue (-some-> (compile-queue-current process)))
-             (is-target (compile-queue-execution-eq-id
-                         execution
-                         (-some-> queue compile-queue-execution)))
-             (killed (not (eq status-code 0))))
+             (is-target (when execution
+                          (compile-queue-execution-eq-id
+                                         execution
+                                         (-some-> queue compile-queue-execution))))
+             (non-zero-exit (not (eq status-code 0))))
         (when execution (setf (compile-queue-execution-status-code execution) status-code))
         (when is-target
           (setf (compile-queue-execution queue) nil)
-          (when killed (compile-queue-clean queue)))
-        (-some-->
-            (-some-> execution
-              compile-queue-execution-promise
-              compile-queue-promise-command
-              compile-queue-command-after-complete)
-          (funcall (compile-queue--callback execution) it))
+          (when non-zero-exit (compile-queue-clean queue)))
+        (-some->> command
+          (compile-queue-command-after-complete)
+          (funcall (compile-queue--callback execution)))
 
         (when is-target
           (progn
-            (if killed
+            (if non-zero-exit
                 (-some--> execution
                   (compile-queue-execution-promise it)
                   (compile-queue-promise-deferred it)
-                  (deferred:errorback it status))
+                  (when (not (deferred:status it)) (deferred:errorback it (string-trim status))))
               (-some--> execution
                 (compile-queue-execution-promise it)
                 (compile-queue-promise-deferred it)
                 (deferred:callback it (-some-> execution compile-queue-execution-buffer))))
-            (unless killed (compile-queue-execute queue))))))))
+            (unless (and (-some-> command compile-queue-command-keep-buffer))
+              (let ((buffer (compile-queue-execution-buffer execution)))
+                (when (and (buffer-live-p buffer) compile-queue-garbage-collect-time)
+                  (with-current-buffer buffer
+                    (setq-local
+                     compile-queue-delegate-mode--gc-timer
+                     (run-at-time compile-queue-garbage-collect-time nil
+                                  (lambda () (compile-queue-delegate-mode--gc-callback execution))))))))
+            (unless non-zero-exit (compile-queue-execute queue))))))))
 
-(defun compile-queue--forward-change (beg end length)
-  "Forward change from an execution buffer to its compile-queue buffer.
-Replaces the text at BEG with LENGTH with the text between BEG and END
-from the execution-buffer in the compile-queue buffer."
-  (when (compile-queue-execution-eq-id compile-queue--execution (compile-queue-execution compile-queue))
-    (let ((text (buffer-substring beg end)))
-      (set-buffer (compile-queue--buffer-name compile-queue))
-      (goto-char beg)
-      (delete-char length)
-      (let ((inhibit-read-only t))
-        (insert text)))))
+(defun compile-queue-delegate-mode--gc-callback (execution)
+  "Kill the buffer for EXECUTION if the buffer is still the same execution."
+  (let ((buffer (compile-queue-execution-buffer execution)))
+    (when (and (buffer-live-p buffer)
+               (compile-queue-execution-eq-id
+                (buffer-local-value 'compile-queue-delegate-mode--execution buffer)
+                execution))
+      (kill-buffer buffer))))
 
-(defun compile-queue--status-code-for-process (process status)
-  "Return the STATUS from PROCESS as a status code."
-  (pcase (process-status process)
-    ((or 'exit 'signal 'failed)
-     (pcase (s-trim status)
-       ("finished" 0)
-       ((rx line-start "exited abnormally with code" (* whitespace) (let code (* digit)))
-        (string-to-number code))
-       (_ nil)))
-    (_ nil)))
-
-(defun compile-queue-execution-eq-id (lhs rhs)
-  "Return non-nil if LHS id == RHS id."
-  (string= (-some-> lhs compile-queue-execution-id)
-           (-some-> rhs compile-queue-execution-id)))
-
-(define-derived-mode compile-queue-mode special-mode "Compile-Queue"
-  "Mode for mirroring the output of the current queue's execution's compile buffer."
-  :group 'compile-queue
-  (read-only-mode 1))
 
 (when (boundp 'evil-motion-state-modes)
   (add-to-list 'evil-motion-state-modes 'compile-queue-mode))

@@ -2,8 +2,7 @@
 [![License](https://img.shields.io/badge/license-GPL_3-green.svg)](https://www.gnu.org/licenses/gpl-3.0.txt)
 [![Version](https://img.shields.io/github/v/tag/tyler-dodge/compile-queue)](https://github.com/tyler-dodge/compile-queue/releases)
 [![Build Status](https://travis-ci.org/tyler-dodge/compile-queue.svg?branch=master)](https://travis-ci.org/github/tyler-dodge/compile-queue)
-[![Coverage Status](https://coveralls.io/repos/github/tyler-dodge/compile-queue/badge.svg?branch=master)](https://coveralls.io/github/tyler-dodge/compile-queue)
-
+[![Coverage Status](https://coveralls.io/repos/github/tyler-dodge/compile-queue/badge.svg?branch=master)](https://coveralls.io/github/tyler-dodge/compile-queue?branch=master)
 ---
 
 The package for running lists of commands, while viewing their output.
@@ -22,7 +21,33 @@ Fully compatible with [deferred.el's](https://github.com/kiwanami/emacs-deferred
 
 QUEUE-NAME is optional.
 
-Currently there are 2 special types
+Currently there are 3 special types
+
+(org-runbook &rest COMMAND)
+(> &rest COMMAND) - run the command by matching the first org-runbook command that matches
+COMMAND concatenated with >>.
+For instance, given
+
+```
+* A
+** A1
+#+BEGIN_SRC shell-queue
+echo A
+#+END_SRC
+* B
+* B2
+```
+
+```
+(org-runbook "A >> A1")
+(org-runbook "A" "A1")
+```
+
+both resolve to the command
+
+```
+echo A
+```
 
 (shell &rest COMMAND)
 
@@ -38,7 +63,7 @@ until the deferred chain before this has already completed.
 Both shell and deferred-shell take the following as keywords
 
 ```
-:env A cons list of environment variables like ((\"KEY2\" . \"VALUE2\") (\"KEY2\" . \"VALUE2\"))
+:env A cons list of environment variables like (("KEY2" . "VALUE2") ("KEY2" . "VALUE2"))
 ```
 
 ```
@@ -125,6 +150,39 @@ The block will still finish running even though the compile-queue is no longer d
 (compile-queue-$ "queue-2"
   (shell "echo Queue 2;sleep 2; echo DONE"))
 ```
+
+### Deferring until after a compile-queue execution
+
+```
+(compile-queue-$
+    (shell "echo TEST")
+    (deferred:nextc it (lambda (buffer)
+        (set-buffer buffer)
+        (message "%s" (string-trim (buffer-string))))))
+```
+
+This will print the string "TEST" in the minibuffer.
+
+### Resuming the queue after deferring
+```
+(compile-queue-$
+    (shell "echo TEST; sleep 1")
+     ;; `it' is set similarly to how `deferred:$' handles `it'.
+    (deferred:nextc it (lambda (buffer)
+        (set-buffer buffer)
+        (message "%s" (string-trim (buffer-string)))))
+    (deferred-shell "echo DONE"))
+```
+
+This will defer scheduling "echo DONE" until after
+
+```
+(lambda (buffer)
+        (set-buffer buffer)
+        (message "%s" (string-trim (buffer-string))))
+```
+
+completes.
 
 ## Contributing
 

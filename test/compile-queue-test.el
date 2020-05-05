@@ -39,7 +39,7 @@
          (done done))
     (deferred:$
       (compile-queue-$
-        (shell "echo A"))
+        (shell :keep-buffer t "echo A"))
       (deferred:nextc it
         (lambda (buffer)
           (should (string=
@@ -58,25 +58,25 @@
        :before-start
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-status-code compile-queue--execution)
+         (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution)
                      nil)))
        :after-complete
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-status-code compile-queue--execution)
+         (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution)
                      0)))
        "true")
       (shell
        :before-start
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-status-code compile-queue--execution)
+         (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution)
                      nil))
          )
        :after-complete
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-status-code compile-queue--execution)
+         (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution)
                      1)))
        "false"))
     (deferred:error it
@@ -92,11 +92,11 @@
       :before-start
       (lambda (buffer)
         (set-buffer buffer)
-        (should (eq (compile-queue-execution-status-code compile-queue--execution) nil)))
+        (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) nil)))
       :after-complete
       (lambda (buffer)
         (set-buffer buffer)
-        (should (eq (compile-queue-execution-status-code compile-queue--execution) 1)))
+        (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) 1)))
       "false"))
     (deferred:error it
       (lambda ()
@@ -105,11 +105,11 @@
           :before-start
           (lambda (buffer)
             (set-buffer buffer)
-            (should (eq (compile-queue-execution-status-code compile-queue--execution) nil)))
+            (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) nil)))
           :after-complete
           (lambda (buffer)
             (set-buffer buffer)
-            (should (eq (compile-queue-execution-status-code compile-queue--execution) 0)))
+            (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) 0)))
           "true"))))
     (deferred:nextc it
       (lambda ()
@@ -119,11 +119,11 @@
           :before-start
           (lambda (buffer)
             (set-buffer buffer)
-            (should (eq (compile-queue-execution-status-code compile-queue--execution) nil)))
+            (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) nil)))
           :after-complete
           (lambda (buffer)
             (set-buffer buffer)
-            (should (eq (compile-queue-execution-status-code compile-queue--execution) 1)))
+            (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) 1)))
           "false"))))
     (deferred:error it
       (lambda (buffer)
@@ -162,9 +162,10 @@
   (let* ((index 0))
     (deferred:$
       (compile-queue-$
-       (shell
-        :major-mode #'fundamental-mode
-        "echo test"))
+        (shell
+         :major-mode #'fundamental-mode
+         :keep-buffer t
+         "echo test"))
       (deferred:nextc it
         (lambda (buffer)
           (set-buffer buffer)
@@ -241,17 +242,53 @@
   (let* ((queue-name "queue")
          (queue (compile-queue-current queue-name)))
     (compile-queue-$
-     (shell
-      :after-complete
-      (lambda (buffer)
-        (set-buffer (window-buffer (selected-window)))
-        (should (string= (s-trim (buffer-string))
-                         "A"))
-        (should (eq (window-point (selected-window)) (point-max)))
-        (funcall done))
-      :major-mode #'fundamental-mode
-      "echo A; sleep 2"))
+      (shell
+       :after-complete
+       (lambda (buffer)
+         (set-buffer (window-buffer (selected-window)))
+         (should (string= (s-trim (buffer-string))
+                          "A"))
+         (should (eq (window-point (selected-window)) (point-max)))
+         (funcall done))
+       :major-mode #'fundamental-mode
+       "echo A; sleep 2"))
     (switch-to-buffer (compile-queue--buffer-name (compile-queue-current compile-queue-root-queue)))
     (set-window-point (selected-window) (point-max))))
+
+(ert-deftest compile-queue-shell-env-ambiguous ()
+  ""
+  (should-not (compile-queue-$--shell-env-ambiguous '("test" . "value")))
+  (should-not (compile-queue-$--shell-env-ambiguous '(("test" . "value"))))
+  (should-not (compile-queue-$--shell-env-ambiguous '(("test" . nil))))
+  (should-not (compile-queue-$--shell-env-ambiguous '(("test"))))
+  (should (compile-queue-$--shell-env-ambiguous '("test" . nil)))
+  (should (compile-queue-$--shell-env-ambiguous '((concat "A" "test") . nil)))
+  (should-not (compile-queue-$--shell-env-ambiguous '((concat "A" "test") . (concat "B" "test"))))
+  (should-not (compile-queue-$--shell-env-ambiguous '((concat "A" "test") . (concat "C" "test"))))
+  (should-not (compile-queue-$--shell-env-ambiguous '((concat (concat "A") "test") . (concat "C" (concat "test"))))))
+
+(ert-deftest-async compile-queue-$-simple ()
+  ""
+  (let ((env '("KeyA" . "KeyB")))
+    (compile-queue-$ (shell :env env "echo" "TEST"))))
+
+(ert-deftest-async compile-queue-$-major-mode ()
+  ""
+  (compile-queue-$ (shell :major-mode #'fundamental-mode "echo test")))
+
+(ert-deftest-async compile-queue-$-env-literal ()
+  ""
+  (compile-queue-$ (shell :major-mode #'fundamental-mode "echo test"))
+  (compile-queue-$ (shell "echo test"))
+  (compile-queue-$ (shell :env ("KeyA" . "ValueA") "echo test"))
+  (compile-queue-$ (shell :env (("KeyA" . "ValueA")) "echo test"))
+  (compile-queue-$ (shell :env (("KeyA" . "ValueA")) "echo test"))
+  (compile-queue-$ (shell :env (("KeyA" . "ValueA") ("KeyB" . "ValueB")) "echo test"))
+  (compile-queue-$ (shell :env (("KeyA" . "ValueA") ("KeyB" . "ValueB")) "echo" "TEST")))
+
+(ert-deftest-async compile-queue-$-env-variable ()
+  ""
+  (let ((env '(("KeyA" . "ValueA") ("KeyB" . "ValueB"))))
+    (compile-queue-$ (shell :env env "echo test"))))
 
 (provide 'compile-queue-test)
