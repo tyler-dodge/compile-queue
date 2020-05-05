@@ -11,29 +11,73 @@ The package for running lists of commands, while viewing their output.
 
 Coming soon to MELPA!
 
+## Features
+
+* Combine shell commands sequentially interactively.
+* No blocking user input for process output.
+* Match against process output as it streams, Ex: regexp search for Server listening on Port.
+* Named buffers for output buffers.
+If a matcher returns true, the output buffer stays alive until the process dies,
+while the queue continues executing the remaining scheduled commands.
+* Callbacks based on the process's lifecycle
+* [org-runbook.el](https://github.com/tyler-dodge/org-runbook) integration
+* [deferred.el](https://github.com/kiwanami/emacs-deferred) integration
+
 ## Usage
 
 ```
 (compile-queue-$ QUEUE-NAME &rest COMMANDS)
 ```
 compile-queue-$ is a macro for chaining COMMANDS on the compile-queue.
-Fully compatible with [deferred.el's](https://github.com/kiwanami/emacs-deferred) deferred:$
+Fully compatible with [deferred.el's](https://github.com/kiwanami/emacs-deferred) `deferred:$`
 
 QUEUE-NAME is optional.
 
-Currently there are 3 special types
+Currently there are 2 special types
+
+### (shell &rest COMMAND)
+---
+
+```
+(shell &rest COMMAND)
+(! &rest COMMAND)
+```
+
+Run the command specified by joining
+the list of COMMAND with spaces
+
+
+```
+(deferred-shell &rest COMMAND)
+(!deferred &rest COMMAND)
+```
+
+Waits to schedule the command until the deferred chain before
+this has already completed.
+
+
+### (org-runbook &rest COMMAND)
+---
+
+```
+(org-runbook &rest COMMAND)
+
+(> &rest COMMAND)
 
 (deferred-org-runbook &rest COMMAND)
+
 (>deferred &rest COMMAND)
-(org-runbook &rest COMMAND)
-(> &rest COMMAND) - run the command by matching the first org-runbook command that matches
+```
+
+Run the command by matching the first org-runbook command that matches
 COMMAND concatenated with >>.
+
 For instance, given
 
 ```
 * A
 ** A1
-#+BEGIN_SRC shell-queue
+#+BEGIN_SRC compile-queue
 echo A
 #+END_SRC
 * B
@@ -45,41 +89,37 @@ echo A
 (org-runbook "A" "A1")
 ```
 
-both resolve to the command
+Both resolve to the command
 
 ```
 echo A
 ```
 
-(shell &rest COMMAND)
+### Common Keywords
+---
 
-(! &rest COMMAND) - run the command specified by joining
-the list of COMMAND with spaces
-
-
-(deferred-shell &rest COMMAND)
-
-(!deferred &rest COMMAND) - waits to schedule the command
-until the deferred chain before this has already completed.
-
-Both shell and deferred-shell take the following as keywords
-
-```
-:env A cons list of environment variables like (("KEY2" . "VALUE2") ("KEY2" . "VALUE2"))
-```
-
-```
-:major-mode The major mode to use for the buffer that handles the output from the shell command
-```
-
-```
-:default-directory The default-directory to use when executing the shell command
-```
+All types take the following keywords:
 
 
-```
-:buffer-name The name of the buffer that will handle the output from the shell command.
-```
+#### :env
+A cons list of environment variables like (("KEY2" . "VALUE2") ("KEY2" . "VALUE2"))
+
+#### :major-mode
+The major mode to use for the buffer that handles the output from the shell command
+
+#### :default-directory
+The default-directory to use when executing the shell command
+
+#### :buffer-name
+The name of the buffer that will handle the output from the shell command.
+
+## org-runbook.el Integration
+
+compile-queue.el can be used as a target for [org-runbook.el](https://github.com/tyler-dodge/org-runbook).
+
+<kbd>M-x</kbd> `customize-variable` <kbd>[RET]</kbd> `org-runbook-execute-command-action` <kbd>[RET]</kbd>
+
+Set value to `#'compile-queue-execute-org-runbook-command`
 
 ## Examples
 
@@ -109,18 +149,22 @@ in the buffer specified by compile-queue-root-queue.
 
 ```
 (compile-queue-$
-(shell :buffer-name "*long*" :matcher (re-search-regexp "Command 2" nil t) "echo Command 1;sleep 1; echo Command 2; sleep 1; echo Command 3")
+(shell
+    :buffer-name "*long*"
+    :matcher (re-search-regexp "Command 2" nil t)
+    "echo Command 1;sleep 1; echo Command 2; sleep 1; echo Command 3")
 (shell "echo Next"))
 ```
 
 This will run
+
 ```
 echo Command 1
 sleep 1
 echo Command 2
 ```
 
-at which point the matcher will match the string Command 2,
+At which point the matcher will match the string Command 2,
 
 which will trigger the next command in the compile-queue to execute,
 which will be
@@ -184,7 +228,7 @@ This will defer scheduling "echo DONE" until after
         (message "%s" (string-trim (buffer-string))))
 ```
 
-completes.
+Completes.
 
 ## Contributing
 

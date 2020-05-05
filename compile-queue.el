@@ -36,6 +36,10 @@
 (require 's)
 (require 'rx)
 
+(declare-function org-runbook--validate-command "ext:org-runbook.el" (command))
+(declare-function org-runbook-command-name "ext:org-runbook.el" (command))
+(declare-function org-runbook-command-full-command "ext:org-runbook.el" (command))
+
 (defgroup compile-queue nil
   "Customization Group for Compile Queue."
   :group 'convenience)
@@ -217,7 +221,7 @@ For instance, given
 ```
 * A
 ** A1
-#+BEGIN_SRC shell-queue
+#+BEGIN_SRC compile-queue
 echo A
 #+END_SRC
 * B
@@ -308,6 +312,7 @@ Kills the current execution."
       (ignore-errors (funcall it nil)))
     (setf (compile-queue-execution queue) nil)
     (setf (compile-queue-scheduled queue) nil))
+  (force-mode-line-update t)
   t)
 
 (defvar compile-queue--converters
@@ -734,6 +739,23 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
        it)
       (s-join ", " it)
       (concat "[" it "]"))))
+
+(defun compile-queue-execute-org-runbook-command (command &optional queue)
+  "Schedule the `org-runbook-command' COMMAND.
+The queue it is scheduled on will be either QUEUE, `compile-queue-current'
+or `compile-queue-root-queue'.
+
+Meant to be used as the action for `org-runbook-execute-command-action'."
+  (org-runbook--validate-command command)
+
+
+
+  (compile-queue-schedule (or queue
+                              (compile-queue-current)
+                              (compile-queue--by-name compile-queue-root-queue))
+                          (compile-queue-shell-command-create
+                           :name (org-runbook-command-name command)
+                           :command (org-runbook-command-full-command command))))
 
 (define-minor-mode compile-queue-delegate-mode
   "Minor mode for buffers that delegate to the compile-queue."
