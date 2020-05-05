@@ -58,25 +58,25 @@
        :before-start
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution)
+         (should (eq (compile-queue-execution--status-code compile-queue-delegate-mode--execution)
                      nil)))
        :after-complete
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution)
+         (should (eq (compile-queue-execution--status-code compile-queue-delegate-mode--execution)
                      0)))
        "true")
       (shell
        :before-start
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution)
+         (should (eq (compile-queue-execution--status-code compile-queue-delegate-mode--execution)
                      nil))
          )
        :after-complete
        (lambda (buffer)
          (set-buffer buffer)
-         (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution)
+         (should (eq (compile-queue-execution--status-code compile-queue-delegate-mode--execution)
                      1)))
        "false"))
     (deferred:error it
@@ -92,11 +92,11 @@
       :before-start
       (lambda (buffer)
         (set-buffer buffer)
-        (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) nil)))
+        (should (eq (compile-queue-execution--status-code compile-queue-delegate-mode--execution) nil)))
       :after-complete
       (lambda (buffer)
         (set-buffer buffer)
-        (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) 1)))
+        (should (eq (compile-queue-execution--status-code compile-queue-delegate-mode--execution) 1)))
       "false"))
     (deferred:error it
       (lambda ()
@@ -105,11 +105,11 @@
           :before-start
           (lambda (buffer)
             (set-buffer buffer)
-            (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) nil)))
+            (should (eq (compile-queue-execution--status-code compile-queue-delegate-mode--execution) nil)))
           :after-complete
           (lambda (buffer)
             (set-buffer buffer)
-            (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) 0)))
+            (should (eq (compile-queue-execution--status-code compile-queue-delegate-mode--execution) 0)))
           "true"))))
     (deferred:nextc it
       (lambda ()
@@ -119,11 +119,11 @@
           :before-start
           (lambda (buffer)
             (set-buffer buffer)
-            (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) nil)))
+            (should (eq (compile-queue-execution--status-code compile-queue-delegate-mode--execution) nil)))
           :after-complete
           (lambda (buffer)
             (set-buffer buffer)
-            (should (eq (compile-queue-execution-status-code compile-queue-delegate-mode--execution) 1)))
+            (should (eq (compile-queue-execution--status-code compile-queue-delegate-mode--execution) 1)))
           "false"))))
     (deferred:error it
       (lambda (buffer)
@@ -169,7 +169,7 @@
       (deferred:nextc it
         (lambda (buffer)
           (set-buffer buffer)
-          (set-buffer (compile-queue--buffer-name (compile-queue-current)))
+          (set-buffer (compile-queue-buffer-name (compile-queue-current)))
           (funcall done))))))
 
 
@@ -231,11 +231,11 @@
      (shell
       :major-mode #'fundamental-mode
       "echo A; sleep 2"))
-    (should (compile-queue-execution queue))
-    (should (compile-queue-scheduled queue))
+    (should (compile-queue--target-execution queue))
+    (should (compile-queue--scheduled queue))
     (compile-queue-clean queue)
-    (should-not (compile-queue-execution queue))
-    (should-not (compile-queue-scheduled queue))))
+    (should-not (compile-queue--target-execution queue))
+    (should-not (compile-queue--scheduled queue))))
 
 (ert-deftest-async compile-queue-trail-window (done)
   "compile-queue-clean should work correctly"
@@ -252,7 +252,7 @@
          (funcall done))
        :major-mode #'fundamental-mode
        "echo A; sleep 2"))
-    (switch-to-buffer (compile-queue--buffer-name (compile-queue-current compile-queue-root-queue)))
+    (switch-to-buffer (compile-queue-buffer-name (compile-queue-current compile-queue-root-queue)))
     (set-window-point (selected-window) (point-max))))
 
 (ert-deftest compile-queue-shell-env-ambiguous ()
