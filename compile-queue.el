@@ -770,14 +770,46 @@ or `compile-queue-root-queue'.
 Meant to be used as the action for `org-runbook-execute-command-action'."
   (org-runbook--validate-command command)
 
-
-
-  (compile-queue-schedule (or queue
-                              (compile-queue-current)
-                              (compile-queue--by-name compile-queue-root-queue))
-                          (compile-queue-shell-command-create
-                           :name (org-runbook-command-name command)
-                           :command (org-runbook-command-full-command command))))
+  (let ((queue (or queue
+                   (compile-queue-current)
+                   (compile-queue--by-name compile-queue-root-queue))))
+    (cl-loop
+     with commands = nil
+     with deferred = nil
+     for subcommand in (org-runbook-command-subcommands command)
+     do
+     (cond ((org-runbook-subcommand-p subcommand) (push (org-runbook-subcommand-command subcommand) commands))
+           ((org-runbook-elisp-subcommand-p subcommand)
+            (if commands
+                (let ((shell-command (compile-queue-shell-command-create
+                                      :name (org-runbook-command-name command)
+                                      :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; ")))))
+                  (setq deferred
+                        (deferred:$
+                          (if deferred
+                              (deferred:nextc deferred)
+                            (lambda (&rest _) (compile-queue-schedule queue shell-command))
+                            (compile-queue-schedule queue shell-command))
+                          (deferred:nextc it `(lambda () ,(org-runbook-elisp-subcommand-elisp subcommand)))))
+                  (setq commands nil))
+              (setq deferred
+                    (deferred:$
+                      (if deferred
+                          (deferred:nextc deferred `(lambda ()
+                                                      (when-let (buffer (compile-queue-buffer-name ,queue))
+                                                        (set-buffer buffer))
+                                                      ,(org-runbook-elisp-subcommand-elisp subcommand)))
+                        (eval (org-runbook-elisp-subcommand-elisp subcommand) t)))))))
+     finally
+     (when commands
+       (let ((shell-command (compile-queue-shell-command-create
+                             :name (org-runbook-command-name command)
+                             :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; ")))))
+         (if deferred
+             (deferred:nextc deferred
+               (lambda (&rest _) (compile-queue-schedule queue shell-command)))
+           (compile-queue-schedule queue shell-command))
+         (setq commands nil))))))
 
 (define-minor-mode compile-queue-delegate-mode
   "Minor mode for buffers that delegate to the compile-queue."
