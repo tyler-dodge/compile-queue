@@ -790,16 +790,23 @@ Meant to be used as the action for `org-runbook-execute-command-action'."
                               (deferred:nextc deferred)
                             (lambda (&rest _) (compile-queue-schedule queue shell-command))
                             (compile-queue-schedule queue shell-command))
-                          (deferred:nextc it `(lambda () ,(org-runbook-elisp-subcommand-elisp subcommand)))))
+                          (deferred:nextc it `(lambda ()
+                                                (save-excursion
+                                                  (when-let (buffer (compile-queue-buffer-name ,queue))
+                                                    (set-buffer buffer))
+                                                  ,(org-runbook-elisp-subcommand-elisp subcommand))))))
                   (setq commands nil))
               (setq deferred
                     (deferred:$
                       (if deferred
                           (deferred:nextc deferred `(lambda ()
-                                                      (when-let (buffer (compile-queue-buffer-name ,queue))
-                                                        (set-buffer buffer))
-                                                      ,(org-runbook-elisp-subcommand-elisp subcommand)))
-                        (eval (org-runbook-elisp-subcommand-elisp subcommand) t)))))))
+                                                      (save-excursion
+                                                        (when-let (buffer (compile-queue-buffer-name ,queue))
+                                                          (set-buffer buffer))
+                                                        ,(org-runbook-elisp-subcommand-elisp subcommand))))
+                        (save-excursion
+                          (set-buffer (compile-queue-buffer-name queue))
+                          (eval (org-runbook-elisp-subcommand-elisp subcommand) t))))))))
      finally
      (when commands
        (let ((shell-command (compile-queue-shell-command-create
