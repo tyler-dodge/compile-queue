@@ -336,7 +336,7 @@ This example shows how compile-queue can be chained with deferred.el."
                         (--map `(setq it ,it)))))
     `(let* ((,queue-var
              (compile-queue--by-name ,(if queue-name-is-queue queue-name compile-queue-root-queue))))
-       (unless (or (null it) (deferred-p it ))
+       (unless (or (not (boundp 'it)) (null it) (deferred-p it ))
          (error "`it' is an unexpected type %S. `it' should be nil or a deferred object 
 before `compile-queue'" it))
        ,@(->> (-drop-last 1 commands))
