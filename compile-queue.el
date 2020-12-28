@@ -882,11 +882,10 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
              (-> rhs compile-queue-execution--id))))
 
 (defun compile-queue-allows-output-p (compile-queue execution)
-  (-message (compile-queue--outputting-executions compile-queue))
-  (-message
-   (-contains-p
-    (compile-queue--outputting-executions compile-queue)
-    (compile-queue-execution--id execution))))
+  (compile-queue--outputting-executions compile-queue)
+  (-contains-p
+   (compile-queue--outputting-executions compile-queue)
+   (compile-queue-execution--id execution)))
 
 (defun compile-queue-limit-output-to-target (compile-queue)
   (setf (compile-queue--outputting-executions compile-queue)
