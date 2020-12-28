@@ -335,8 +335,10 @@ This example shows how compile-queue can be chained with deferred.el."
                         (--map (compile-queue-$--expand-group queue-var it))
                         (--map `(setq it ,it)))))
     `(let* ((,queue-var
-             (compile-queue--by-name ,(if queue-name-is-queue queue-name compile-queue-root-queue)))
-            (it nil))
+             (compile-queue--by-name ,(if queue-name-is-queue queue-name compile-queue-root-queue))))
+       (unless (or (null it) (deferred-p it ))
+         (error "`it' is an unexpected type %S. `it' should be nil or a deferred object 
+before `compile-queue'" it))
        ,@(->> (-drop-last 1 commands))
        (prog1 ,@(->> (last commands))))))
 
@@ -490,7 +492,7 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
   "Return non-nil if ENV is ambiguous."
   (pcase env
     (`(((,_ . ,_) . ,_)) nil)
-    (`((,_ ,_ . ,_)) t)
+    (`((,_ ,_ . ,_)) nil)
     (`((,_ . ,_)) nil)
     (`(,_ . nil) t)))
 
@@ -498,6 +500,7 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
   "Return wrapped ENV if it is not a list."
   (pcase env
     ('nil nil)
+    (`((,_ . ,_)) env)
     (`((,_ . ,_) (,_ . ,_)) env)
     (`(,_ . nil) env)
     (`(,_ . ,_) (list env))
@@ -541,19 +544,13 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
             ((compile-queue-$--shell-env-ambiguous env)
              (error "Current structure is ambiguous.  Use full syntax to clear the ambiguity.
 Ex: `(shell :env ((KEY . nil))'.  %S" env))
-            (t
-             `(quote ,(compile-queue-$--shell-wrap-env env))))
-           (--map (cons (eval (car it)) (eval (cdr it))))
+            (t (compile-queue-$--shell-wrap-env env)))
            (-non-nil))))
-    (->> list
-         (--map
-          (prog1 it
-            (unless (consp it)
-              (error "Env should be either an alist or a cons.  Found: %s.  List %s" it list))
-            (unless (stringp (car it))
-              (error "Env Key should resolve to a string .  Found: %s.  Cons: %s.  List %s" (car it) it list))
-            (unless (or (stringp (cdr it)) (not (cdr it)))
-              (error "Env Value should resolve to a string .  Found: %s.  Cons: %s.  List %s" (cdr it) it list)))))))
+    `(list ,@(->> list
+           (--map
+            (prog1 `(cons ,(car it) ,(cdr it))
+              (unless (consp it)
+                (error "Env should be either an alist or a cons.  Found: %s.  List %s" it list))))))))
 
 
 (defun compile-queue-$--org-runbook-command (list)
