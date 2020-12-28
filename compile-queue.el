@@ -62,8 +62,14 @@ See `cl-defstruct'"
   "Customization Group for Compile Queue."
   :group 'convenience)
 
-(defcustom compile-queue-root-queue
-  "compile-queue"
+(defcustom compile-queue-default-process-connection-type nil
+  "The default value to set for `process-connection-type' for compile-queue commands.
+Can be overriden by specifying pty on the `compile-queue-shell-command'."
+  :safe t
+  :type 'booleanp
+  :group 'compile-queue)
+
+(defcustom compile-queue-root-queue "compile-queue"
   "Name of the compile queue that is used by default if a compile queue is not specified when calling."
   :safe t
   :type 'stringp
@@ -124,7 +130,8 @@ Set automatically if the matcher throws an error.")
   name
   buffer-name
   target-execution
-  scheduled)
+  scheduled
+  outputting-executions)
 
 
 (compile-queue-defstruct compile-queue-command
@@ -230,12 +237,14 @@ Groups are mainly used for managing commands that do not make sense to run in is
 :major-mode The major mode to use for the buffer that handles the output from the shell command
 :default-directory The default-directory to use when executing the shell command
 :buffer-name The name of the buffer that will handle the output from the shell command.
+:pty t if this requires a pty
 If nil, it defaults to a truncated version of the command."
   command
   env
   major-mode
   default-directory
-  buffer-name)
+  buffer-name
+  pty)
 
 ;; Do not want the symbolp validation that is created by default
 (put 'compile-queue-shell-command-create 'compiler-macro nil)
@@ -338,11 +347,10 @@ This example shows how compile-queue can be chained with deferred.el."
               (compile-queue-group-create
                :parent-group compile-queue-$--group
                :name  (quote ,name)))
-        (compile-queue-$ ,@rest)
-        (compile-queue-schedule ,queue-var compile-queue-$--group)
-        (setq compile-queue-$--group
-              (-some-> compile-queue-$--group
-                compile-queue-group--parent-group))))
+        (prog1 (compile-queue-schedule ,queue-var compile-queue-$--group)
+          (setq compile-queue-$--group
+                (-some-> compile-queue-$--group
+                  compile-queue-group--parent-group)))))
     
     (_
      (compile-queue-$-command queue-var command))))
@@ -508,7 +516,8 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
                   :env ,(let ((env (if (and (consp env) (not (cdr env))) env env)))
                           (compile-queue-$--shell-command-expand-env env))
                   ,@(unless (ht-get plist-ht :default-directory) (list :default-directory default-directory))
-                 ,@(ht->plist plist-ht)
+                  ,@(ht->plist plist-ht)
+                  :pty ,(plist-get plist :pty)
                   :matcher ,(cond
                              ((or (not matcher)
                                   (symbolp matcher)
@@ -658,10 +667,11 @@ Accepts initial values for the var-names as well similar to `let' bindings."
     (--each (compile-queue-shell-command--env command)
       (add-to-list 'process-environment (concat (car it) "="
                                                 (cdr it))))
-    (start-process-shell-command
-     (compile-queue-shell-command-name command)
-     (compile-queue-shell-command-buffer-name command)
-     (compile-queue-shell-command-command  command))))
+    (let ((process-connection-type (compile-queue-shell-command--pty command)))
+      (start-process-shell-command
+       (compile-queue-shell-command-name command)
+       (compile-queue-shell-command-buffer-name command)
+       (compile-queue-shell-command-command  command)))))
 
 (defun compile-queue-command--execute (promise queue group)
   "Execute PROMISE in a buffer related to QUEUE."
@@ -678,6 +688,7 @@ Accepts initial values for the var-names as well similar to `let' bindings."
         (setq-local compile-queue-delegate-mode--execution execution)
         (prog1 execution
           (setf (compile-queue--target-execution queue) execution)
+          (compile-queue-limit-output-to-target queue)
           (-some--> (compile-queue-command--before-start command)
             (funcall (compile-queue--callback execution) it))
           (let* ((process (compile-queue-command--start-process command)))
@@ -735,8 +746,7 @@ Accepts initial values for the var-names as well similar to `let' bindings."
             (setf (compile-queue--scheduled queue) rest)
             (setf (compile-queue--target-execution queue)
                   (compile-queue-group-create-execution (compile-queue-promise--command next-command)))
-            (compile-queue-execute queue)     
-            )
+            (compile-queue-execute queue))
            ((-some-> next-command compile-queue-promise--command compile-queue-command-p)
             (setf (compile-queue--scheduled queue) rest)
             (setf (compile-queue--target-execution queue)
@@ -845,7 +855,8 @@ Replaces the buffer if it already exists."
   "Forward change to the `compile-queue-delegate-mode--queue' buffer.
 Replaces the text at BEG with LENGTH with the text between BEG and END
 from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
-  (when (compile-queue-execution-eq-id compile-queue-delegate-mode--execution (compile-queue--target-execution compile-queue-delegate-mode--queue))
+  (when (compile-queue-allows-output-p compile-queue-delegate-mode--queue
+                                       compile-queue-delegate-mode--execution)
     (let ((text (buffer-substring beg end)))
       (with-current-buffer (compile-queue-buffer-name compile-queue-delegate-mode--queue)
         (goto-char beg)
@@ -869,6 +880,17 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
   (when (and lhs rhs)
     (string= (-> lhs compile-queue-execution--id)
              (-> rhs compile-queue-execution--id))))
+
+(defun compile-queue-allows-output-p (compile-queue execution)
+  (-message (compile-queue--outputting-executions compile-queue))
+  (-message
+   (-contains-p
+    (compile-queue--outputting-executions compile-queue)
+    (compile-queue-execution--id execution))))
+
+(defun compile-queue-limit-output-to-target (compile-queue)
+  (setf (compile-queue--outputting-executions compile-queue)
+        (list (compile-queue-execution--id (compile-queue--target-execution compile-queue)))))
 
 (define-derived-mode compile-queue-mode special-mode "Compile-Queue"
   "Mode for mirroring the output of the current queue's execution's compile buffer."
@@ -1024,9 +1046,7 @@ is currently set at `point-max'."
           (compile-queue-execute queue))))
 
     (let* ((execution (buffer-local-value 'compile-queue-delegate-mode--execution process-buffer)))
-      (if (and execution (compile-queue-execution-eq-id
-                          execution
-                          (-some-> queue compile-queue--target-execution)))
+      (if (and execution (compile-queue-allows-output-p queue execution))
           (progn
             (with-current-buffer (compile-queue-buffer-name queue)
               (let ((pt-max (point-max)))
@@ -1133,6 +1153,15 @@ Handles notifying compile queue the process STATUS on completion."
        (setq compile-queue-delegate-mode--inhibit-process-sentinel nil))))
 
 (defun compile-queue-execution-restart (execution)
+  "Restart the EXECUTION without triggering any deferred callbacks."
+  (or (compile-queue-execution-p execution) (error "Unexpected type passed: %S" execution))
+  (let ((command (compile-queue-execution-command execution)))
+    (cond
+     ((compile-queue-shell-command-p command)
+      (compile-queue-shell-command--restart execution))
+     (t (error "Unknown command type command: %S, execution: %S." command execution)))))
+
+(defun compile-queue-group-restart (execution)
   "Restart the EXECUTION without triggering any deferred callbacks."
   (or (compile-queue-execution-p execution) (error "Unexpected type passed: %S" execution))
   (let ((command (compile-queue-execution-command execution)))
