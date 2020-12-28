@@ -332,7 +332,8 @@ This example shows how compile-queue can be chained with deferred.el."
   (let* ((queue-name-is-queue (or (stringp queue-name) (symbolp queue-name)))
          (queue-var (make-symbol "queue"))
          (commands (->> (if queue-name-is-queue commands (append (list queue-name) commands))
-                        (--map (compile-queue-$--expand-group queue-var it)))))
+                        (--map (compile-queue-$--expand-group queue-var it))
+                        (--map `(setq it ,it)))))
     `(let* ((,queue-var
              (compile-queue--by-name ,(if queue-name-is-queue queue-name compile-queue-root-queue)))
             (it nil))
@@ -353,7 +354,9 @@ This example shows how compile-queue can be chained with deferred.el."
                   compile-queue-group--parent-group)))))
     
     (_
-     (compile-queue-$-command queue-var command))))
+     (or
+      (compile-queue-$-command queue-var command)
+      command))))
 
 ;;;###autoload
 (defmacro compile-queue-force-$ (queue-name &rest rest)
