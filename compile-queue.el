@@ -66,20 +66,20 @@ See `cl-defstruct'"
   "The default value to set for `process-connection-type' for compile-queue commands.
 Can be overriden by specifying pty on the `compile-queue-shell-command'."
   :safe t
-  :type 'booleanp
+  :type 'boolean
   :group 'compile-queue)
 
 (defcustom compile-queue-root-queue "compile-queue"
   "Name of the compile queue that is used by default if a compile queue is not specified when calling."
   :safe t
-  :type 'stringp
+  :type 'string
   :group 'compile-queue)
 
 (defcustom compile-queue-mode-line-format
   '(" %b" " - " (:eval (or (compile-queue-mode--mode-line-command-name) "")) " " (:eval (compile-queue-mode--mode-line-scheduled)))
   "The `mode-line-format' used by the queue buffer."
   :safe t
-  :type 'stringp
+  :type 'string
   :group 'compile-queue)
 
 
@@ -88,7 +88,7 @@ Can be overriden by specifying pty on the `compile-queue-shell-command'."
   "Time in seconds before the buffer is garbage collected automatically.
 Set to nil to disable garbage collection."
   :safe t
-  :type 'numberp
+  :type 'number
   :group 'compile-queue)
 
 
@@ -96,7 +96,14 @@ Set to nil to disable garbage collection."
   #'comint-mode
   "The `major-mode' used in the compile-queue buffer if the `compile-queue-command' does not specify a `major-mode'."
   :safe t
-  :type 'functionp
+  :type 'function
+  :group 'compile-queue)
+
+(defcustom compile-queue-max-buffer-line-limit
+  nil
+  "The max size for a compile queue buffer. Deletes old lines to keep within limit."
+  :type 'number
+  :safe t
   :group 'compile-queue)
 
 (defvar compile-queue--name-ht (ht)
@@ -336,7 +343,7 @@ This example shows how compile-queue can be chained with deferred.el."
                         (--map `(setq it ,it)))))
     `(let* ((,queue-var
              (compile-queue--by-name ,(if queue-name-is-queue queue-name compile-queue-root-queue))))
-       (unless (or (not (boundp 'it)) (null it) (deferred-p it ))
+       (unless (or (not (boundp 'it)) (null it) (deferred-p it))
          (error "`it' is an unexpected type %S. `it' should be nil or a deferred object 
 before `compile-queue'" it))
        ,@(->> (-drop-last 1 commands))
@@ -534,23 +541,20 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
                   (s-join " " (list ,@command-rest)))))))
 
 (defun compile-queue-$--shell-command-expand-env (env)
-  (let* ((list
-          (->>
-           (cond
-            ((not env) nil)
-            ((symbolp env)
-             `(let ((result ,env))
-                (compile-queue-$--shell-wrap-env result)))
-            ((compile-queue-$--shell-env-ambiguous env)
-             (error "Current structure is ambiguous.  Use full syntax to clear the ambiguity.
+  (cond
+   ((not env) nil)
+   ((symbolp env)
+    `(let ((result ,env))
+       (compile-queue-$--shell-wrap-env result)))
+   ((compile-queue-$--shell-env-ambiguous env)
+    (error "Current structure is ambiguous.  Use full syntax to clear the ambiguity.
 Ex: `(shell :env ((KEY . nil))'.  %S" env))
-            (t (compile-queue-$--shell-wrap-env env)))
-           (-non-nil))))
-    `(list ,@(->> list
+   (t
+    `(list ,@(->> (compile-queue-$--shell-wrap-env env) (-non-nil)
            (--map
             (prog1 `(cons ,(car it) ,(cdr it))
               (unless (consp it)
-                (error "Env should be either an alist or a cons.  Found: %s.  List %s" it list))))))))
+                (error "Env should be either an alist or a cons.  Found: %s.  List %s" it list)))))))))
 
 
 (defun compile-queue-$--org-runbook-command (list)
@@ -676,7 +680,10 @@ Accepts initial values for the var-names as well similar to `let' bindings."
 (defun compile-queue-command--execute (promise queue group)
   "Execute PROMISE in a buffer related to QUEUE."
   (let* ((command (compile-queue-promise--command promise))
-         (buffer (compile-queue-shell-command--init-buffer command)))
+         (buffer (progn
+                   (setf (compile-queue--outputting-executions queue) nil)
+                   (--> (compile-queue-buffer-name queue) (with-current-buffer it (let ((inhibit-read-only t)) (erase-buffer))))
+                   (compile-queue-shell-command--init-buffer command))))
     (with-current-buffer buffer
       (setq-local compile-queue-delegate-mode--queue queue)
       (let ((execution (compile-queue-execution-create
@@ -835,7 +842,9 @@ Replaces the buffer if it already exists."
     (with-current-buffer buffer-name
 
       (-some--> (get-buffer-process (current-buffer))
-        (when (process-live-p it) (kill-process it)))
+        (when (process-live-p it)
+          (set-process-filter it t)
+          (kill-process it)))
       (buffer-disable-undo)
       (let ((inhibit-read-only t))
         (erase-buffer))
@@ -856,13 +865,36 @@ Replaces the buffer if it already exists."
 Replaces the text at BEG with LENGTH with the text between BEG and END
 from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
   (when (compile-queue-allows-output-p compile-queue-delegate-mode--queue
-                                       compile-queue-delegate-mode--execution)
-    (let ((text (buffer-substring beg end)))
+                                     compile-queue-delegate-mode--execution)
+    (let ((text (buffer-substring beg end))
+          (removed-lines (or (and compile-queue-max-buffer-line-limit (- (line-number-at-pos (point-max)) compile-queue-max-buffer-line-limit))
+                             0)))
+      (when (> removed-lines 0)
+        (save-excursion
+          (let ((inhibit-read-only t))
+            (goto-char (point-min))
+            (delete-region (point-min) (save-excursion (forward-line removed-lines) (point))))))
+
       (with-current-buffer (compile-queue-buffer-name compile-queue-delegate-mode--queue)
-        (goto-char beg)
-        (delete-char length)
-        (let ((inhibit-read-only t))
-          (insert text))))))
+        (let* ((compile-queue-end-pt (point-max))
+              (scroll-to-end (->> (get-buffer-window-list (current-buffer) nil t)
+                                  (--filter (eq (window-point it) compile-queue-end-pt)))))
+          (save-excursion
+            (let ((inhibit-read-only t))
+              (goto-char beg)
+              (delete-char length)
+              (insert text)
+              (when (> removed-lines 0)
+                (goto-char (point-min))
+                (delete-region (point-min) (save-excursion (forward-line removed-lines) (point))))))
+          (--each scroll-to-end
+            (set-window-point it (point-max))
+            (set-window-start
+             it
+             (save-excursion
+               (goto-char (point-max))
+               (forward-line (floor (- (- (window-height it 'floor) 3))))
+               (point)))))))))
 
 (defun compile-queue-delegate-mode--status-code-for-process (process status)
   "Return the STATUS from PROCESS as a status code."
@@ -882,7 +914,6 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
              (-> rhs compile-queue-execution--id))))
 
 (defun compile-queue-allows-output-p (compile-queue execution)
-  (compile-queue--outputting-executions compile-queue)
   (-contains-p
    (compile-queue--outputting-executions compile-queue)
    (compile-queue-execution--id execution)))
@@ -1014,8 +1045,6 @@ is currently set at `point-max'."
           (-some->> process-buffer
             (buffer-local-value 'compile-queue-delegate-mode--process-filter-delegate)))
          (compile-queue-end-pt (with-current-buffer (process-buffer process) (point-max)))
-         (scroll-to-end (->> (get-buffer-window-list compile-queue-buffer)
-                             (--filter (eq (window-point it) compile-queue-end-pt))))
          (execution (buffer-local-value 'compile-queue-delegate-mode--execution process-buffer))
          (start (marker-position (process-mark process))))
     (-some--> delegate (progn
@@ -1042,21 +1071,7 @@ is currently set at `point-max'."
                 compile-queue-execution--promise
                 compile-queue-promise--deferred)
             (-> execution compile-queue-execution--buffer))
-          (compile-queue-execute queue))))
-
-    (let* ((execution (buffer-local-value 'compile-queue-delegate-mode--execution process-buffer)))
-      (if (and execution (compile-queue-allows-output-p queue execution))
-          (progn
-            (with-current-buffer (compile-queue-buffer-name queue)
-              (let ((pt-max (point-max)))
-                (--each scroll-to-end
-                  (set-window-point it pt-max)
-                  (set-window-start
-                   it
-                   (save-excursion
-                     (goto-char pt-max)
-                     (forward-line (floor (- (- (window-height it 'floor) 3))))
-                     (point)))))))))))
+          (compile-queue-execute queue))))))
 
 (defun compile-queue-delegate-mode--process-sentinel (process status)
   "Delegating sentinel for compile-queue.
@@ -1126,9 +1141,9 @@ Handles notifying compile queue the process STATUS on completion."
   "Kill the buffer for EXECUTION if the buffer is still the same execution."
   (let ((buffer (compile-queue-execution--buffer execution)))
     (when (and (buffer-live-p buffer)
-               (compile-queue-execution-eq-id
-                (buffer-local-value 'compile-queue-delegate-mode--execution buffer)
-                execution))
+               (not (compile-queue-allows-output-p
+                     (buffer-local-value 'compile-queue-delegate-mode--queue buffer)
+                     execution)))
       (kill-buffer buffer))))
 
 (defun compile-queue-shell-command--restart (execution)
