@@ -54,7 +54,4 @@
                execution))
     (compile-queue-execution-restart execution)))
 
-(compile-queue-$
-  (! "echo test; sleep 5; echo A; sleep 20; echo B")
-  (! "echo ALL DONE"))
 (provide 'compile-queue-ivy)
