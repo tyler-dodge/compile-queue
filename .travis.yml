@@ -16,7 +16,6 @@ before_install:
   # Configure $PATH: Executables are installed to $HOME/bin
   - export PATH="$HOME/bin:$PATH"
   # Download the makefile to emacs-travis.mk
-  - wget 'https://raw.githubusercontent.com/flycheck/emacs-travis/master/emacs-travis.mk'
   # Install Emacs (according to $EMACS_VERSION) and Cask
   
   # The Ubuntu 14.04 image on Travis has an outdated GnuTLS which prevents us from
