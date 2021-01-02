@@ -262,7 +262,6 @@
   (should-not (compile-queue-$--shell-env-ambiguous '(("test" . nil))))
   (should-not (compile-queue-$--shell-env-ambiguous '(("test"))))
   (should (compile-queue-$--shell-env-ambiguous '("test" . nil)))
-  (should (compile-queue-$--shell-env-ambiguous '((concat "A" "test") . nil)))
   (should-not (compile-queue-$--shell-env-ambiguous '((concat "A" "test") . (concat "B" "test"))))
   (should-not (compile-queue-$--shell-env-ambiguous '((concat "A" "test") . (concat "C" "test"))))
   (should-not (compile-queue-$--shell-env-ambiguous '((concat (concat "A") "test") . (concat "C" (concat "test"))))))

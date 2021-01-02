@@ -737,7 +737,9 @@ Accepts initial values for the var-names as well similar to `let' bindings."
   (let* ((command (compile-queue-promise--command promise))
          (buffer (progn
                    (setf (compile-queue--outputting-executions queue) nil)
-                   (--> (compile-queue-buffer-name queue) (with-current-buffer it (let ((inhibit-read-only t)) (erase-buffer))))
+                   (--> (compile-queue-buffer-name queue)
+                        (with-current-buffer (or (get-buffer it) (generate-new-buffer it))
+                          (let ((inhibit-read-only t)) (erase-buffer))))
                    (compile-queue-shell-command--init-buffer command))))
     (with-current-buffer buffer
       (setq-local compile-queue-delegate-mode--queue queue)
@@ -1103,11 +1105,9 @@ Also, manages scolling windows to the end if the point
 is currently set at `point-max'."
   (let* ((process-buffer (process-buffer process))
          (queue (compile-queue-current process))
-         (compile-queue-buffer (-some-> queue compile-queue-buffer-name get-buffer))
          (delegate
           (-some->> process-buffer
             (buffer-local-value 'compile-queue-delegate-mode--process-filter-delegate)))
-         (compile-queue-end-pt (with-current-buffer (process-buffer process) (point-max)))
          (execution (buffer-local-value 'compile-queue-delegate-mode--execution process-buffer))
          (start (marker-position (process-mark process))))
     (-some--> delegate (progn
