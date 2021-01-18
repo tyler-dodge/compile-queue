@@ -960,18 +960,20 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
                       (let ((pt-max (point-max)))
                         (->> (get-buffer-window-list buffer nil t)
                              (--map 
-                              (let* ((window-start (save-excursion
-                                                    (goto-char (point-max))
-                                                    (when (ignore-errors
-                                                            (line-move-visual
-                                                             (ceiling (- (- (window-height it 'floor) 3))))
-                                                            t)
-                                                      (point)))))
-                                (when window-start
-                                  (cons it (compile-queue--tail-end-window-state it pt-max window-start)))))
+                              (with-selected-frame (window-frame it)
+                                (let* ((window-start (save-excursion
+                                                       (goto-char (point-max))
+                                                       (when (ignore-errors
+                                                               (line-move-visual
+                                                                (ceiling (- (- (window-height it 'floor) 3))))
+                                                               t)
+                                                         (point)))))
+                                  (when window-start
+                                    (cons it (compile-queue--tail-end-window-state it pt-max window-start))))))
                              (-non-nil))))))
     (when it
-      (window-state-put (cdr it) (car it)))))
+      (with-selected-frame (window-frame (car it))
+        (window-state-put (cdr it) (car it))))))
 
 (defun compile-queue--tail-end-window-state (window new-pt new-start)
   (-let [(window-state &as &alist 'buffer (buffer-list &as &alist 'start start)) (window-state-get window t)]
