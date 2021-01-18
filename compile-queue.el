@@ -576,7 +576,7 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
                   :group compile-queue-$--group
                   :env ,(let ((env (if (and (consp env) (not (cdr env))) env env)))
                           (compile-queue-$--shell-command-expand-env env))
-                  ,@(unless (ht-get plist-ht :default-directory) (list :default-directory default-directory))
+                  ,@(unless (ht-get plist-ht :default-directory) (list :default-directory 'default-directory))
                   ,@(ht->plist plist-ht)
                   :pty ,(plist-get plist :pty)
                   :matcher ,(cond
@@ -926,6 +926,7 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
   (when (compile-queue-allows-output-p compile-queue-delegate-mode--queue
                                      compile-queue-delegate-mode--execution)
     (let ((text (buffer-substring beg end))
+          (inhibit-redisplay t)
           (removed-lines (or (and compile-queue-max-buffer-line-limit (- (line-number-at-pos (point-max)) compile-queue-max-buffer-line-limit))
                              0)))
       (when (> removed-lines 0)
@@ -946,14 +947,38 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
               (when (> removed-lines 0)
                 (goto-char (point-min))
                 (delete-region (point-min) (save-excursion (forward-line removed-lines) (point))))))
-          (--each scroll-to-end
-            (set-window-point it (point-max))
-            (set-window-start
-             it
-             (save-excursion
-               (goto-char (point-max))
-               (forward-line (floor (- (- (window-height it 'floor) 3))))
-               (point)))))))))
+          (--each scroll-to-end (set-window-point it (point-max)))))
+      (compile-queue-delegate-mode--scroll-to-end-hook))))
+
+(add-hook 'window-state-change-hook #'compile-queue-delegate-mode--scroll-to-end-hook)
+(defun compile-queue-delegate-mode--scroll-to-end-hook ()
+  (--each (->>
+           (cl-loop for buffer in
+                    (->> (ht-values compile-queue--name-ht) (--map (compile-queue-buffer-name it)))
+                    append
+                    (with-current-buffer buffer
+                      (let ((pt-max (point-max)))
+                        (->> (get-buffer-window-list buffer nil t)
+                             (--map 
+                              (let* ((window-start (save-excursion
+                                                    (goto-char (point-max))
+                                                    (when (ignore-errors
+                                                            (line-move-visual
+                                                             (ceiling (- (- (window-height it 'floor) 3))))
+                                                            t)
+                                                      (point)))))
+                                (when window-start
+                                  (cons it (compile-queue--tail-end-window-state it pt-max window-start)))))
+                             (-non-nil))))))
+    (when it
+      (window-state-put (cdr it) (car it)))))
+
+(defun compile-queue--tail-end-window-state (window new-pt new-start)
+  (-let [(window-state &as &alist 'buffer (buffer-list &as &alist 'start start)) (window-state-get window t)]
+    (setf (alist-get 'start buffer-list) new-start)
+    (setf (alist-get 'point buffer-list) new-pt)
+    window-state))
+
 
 (defun compile-queue-delegate-mode--status-code-for-process (process status)
   "Return the STATUS from PROCESS as a status code."
@@ -1116,25 +1141,26 @@ is currently set at `point-max'."
                           compile-queue-execution--promise
                           compile-queue-promise--command
                           compile-queue-command--matcher)))
-      (with-current-buffer process-buffer
-        (goto-char start)
-        (when (and (not compile-queue-delegate-mode--matcher-disabled)
-                   (condition-case error
-                       (if (functionp matcher)
-                           (funcall matcher output)
-                         output)
-                     (error
-                      (setq-local compile-queue-delegate-mode--matcher-disabled t)
-                      (error "%s" (error-message-string error)))
-                     (user-error
-                      (setq-local compile-queue-delegate-mode--matcher-disabled t)
-                      (error "%s" (error-message-string error)))))
-          (deferred:callback
-            (-> execution
-                compile-queue-execution--promise
-                compile-queue-promise--deferred)
-            (-> execution compile-queue-execution--buffer))
-          (compile-queue-execute queue))))))
+      (let ((inhibit-redisplay t))
+        (with-current-buffer process-buffer
+          (goto-char start)
+          (when (and (not compile-queue-delegate-mode--matcher-disabled)
+                     (condition-case error
+                         (if (functionp matcher)
+                             (funcall matcher output)
+                           output)
+                       (error
+                        (setq-local compile-queue-delegate-mode--matcher-disabled t)
+                        (error "%s" (error-message-string error)))
+                       (user-error
+                        (setq-local compile-queue-delegate-mode--matcher-disabled t)
+                        (error "%s" (error-message-string error)))))
+            (deferred:callback
+              (-> execution
+                  compile-queue-execution--promise
+                  compile-queue-promise--deferred)
+              (-> execution compile-queue-execution--buffer))
+            (compile-queue-execute queue)))))))
 
 (defun compile-queue-delegate-mode--process-sentinel (process status)
   "Delegating sentinel for compile-queue.
