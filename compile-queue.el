@@ -1179,10 +1179,18 @@ Meant to be used as the action for `org-runbook-execute-command-action'."
                           (eval (org-runbook-elisp-subcommand-elisp subcommand) t))))))))
      finally
      (when commands
-       (let ((shell-command (compile-queue-shell-command-create
-                             :name (org-runbook-command-name command)
-                             :pty (org-runbook-command-pty command)
-                             :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; ")))))
+       (let* ((host (org-runbook-command-get-property command "HOST"))
+              (shell-command
+               (if host
+                   (compile-queue-ssh-shell-command-create
+                    :name (org-runbook-command-name command)
+                    :pty (org-runbook-command-pty command)
+                    :host host
+                    :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; ")))
+                   (compile-queue-shell-command-create
+                    :name (org-runbook-command-name command)
+                    :pty (org-runbook-command-pty command)
+                    :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; "))))))
          (if deferred
              (deferred:nextc deferred
                (lambda (&rest _) (compile-queue-schedule queue shell-command)))
