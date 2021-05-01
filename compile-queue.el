@@ -965,7 +965,7 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
                                                        (goto-char (point-max))
                                                        (when (ignore-errors
                                                                (line-move-visual
-                                                                (ceiling (- (- (window-height it 'floor) 3))))
+                                                                (ceiling (- (- (window-height it 'floor) 4))))
                                                                t)
                                                          (point)))))
                                   (when window-start
@@ -1080,6 +1080,7 @@ Meant to be used as the action for `org-runbook-execute-command-action'."
            ((org-runbook-elisp-subcommand-p subcommand)
             (if commands
                 (let ((shell-command (compile-queue-shell-command-create
+                                      :pty (org-runbook-command-pty command)
                                       :name (org-runbook-command-name command)
                                       :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; ")))))
                   (setq deferred
@@ -1108,6 +1109,7 @@ Meant to be used as the action for `org-runbook-execute-command-action'."
      (when commands
        (let ((shell-command (compile-queue-shell-command-create
                              :name (org-runbook-command-name command)
+                             :pty (org-runbook-command-pty command)
                              :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; ")))))
          (if deferred
              (deferred:nextc deferred
