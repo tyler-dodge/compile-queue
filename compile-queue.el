@@ -283,8 +283,17 @@ If nil, it defaults to a truncated version of the command."
   buffer-name
   pty)
 
+(compile-queue-defstruct (compile-queue-ssh-shell-command
+                          (:include compile-queue-shell-command))
+  "Represents a ssh shell command.
+:host The host to run the command on.
+See `compile-queue-shell-command'
+"
+  host)
+
 ;; Do not want the symbolp validation that is created by default
 (put 'compile-queue-shell-command-create 'compiler-macro nil)
+(put 'compile-queue-ssh-shell-command-create 'compiler-macro nil)
 
 (defvar compile-queue-$--group nil)
 
@@ -465,6 +474,7 @@ Kills the current execution."
 (defvar compile-queue--converters
   '(compile-queue-$--deferred-shell-command
     compile-queue-$--shell-command
+    compile-queue-$--ssh-shell-command
     compile-queue-$--comint-command
     compile-queue-$--deferred-org-runbook-command
     compile-queue-$--org-runbook-command)
@@ -574,6 +584,35 @@ QUEUE-VAR is the symbol of a variable that points the queue name.
        :protocol 'v1
        :command `(compile-queue-shell-command-create
                   :group compile-queue-$--group
+                  :env ,(let ((env (if (and (consp env) (not (cdr env))) env env)))
+                          (compile-queue-$--shell-command-expand-env env))
+                  ,@(unless (ht-get plist-ht :default-directory) (list :default-directory 'default-directory))
+                  ,@(ht->plist plist-ht)
+                  :pty ,(plist-get plist :pty)
+                  :matcher ,(cond
+                             ((or (not matcher)
+                                  (symbolp matcher)
+                                  (and (listp matcher) (eq (car matcher) 'lambda)))
+                              matcher)
+                             (t `(lambda (it) ,matcher)))
+                  :command
+                  (s-join " " (list ,@command-rest)))))))
+
+(defun compile-queue-$--ssh-shell-command (list)
+  "Return `shell' if LIST match."
+  (when (memq (car list) (list 'ssh '!!))
+    (-let* ((host (cadr list))
+            ((plist . command-rest) (compile-queue--split-plist (cddr list)))
+            (plist-ht (ht<-plist plist))
+            (env (ht-get plist-ht :env))
+            (matcher (ht-get plist-ht :matcher)))
+      (when matcher (ht-remove plist-ht :matcher))
+      (when env (ht-remove plist-ht :env))
+      (list
+       :protocol 'v1
+       :command `(compile-queue-ssh-shell-command-create
+                  :group compile-queue-$--group
+                  :host ,host
                   :env ,(let ((env (if (and (consp env) (not (cdr env))) env env)))
                           (compile-queue-$--shell-command-expand-env env))
                   ,@(unless (ht-get plist-ht :default-directory) (list :default-directory 'default-directory))
@@ -716,12 +755,17 @@ Accepts initial values for the var-names as well similar to `let' bindings."
                            :deferred (deferred:new))))
    :parent-group-execution
    parent))
-
-(defun compile-queue-shell-command-command (command)
-  "Return the full shell command for COMMAND."
+(cl-defgeneric compile-queue-shell-command-full-command (command))
+(cl-defmethod compile-queue-shell-command-full-command ((command compile-queue-shell-command))
+    "Return the full shell command for COMMAND."
   (compile-queue-shell-command--command command))
 
-(defun compile-queue-command--start-process (command)
+(cl-defmethod compile-queue-shell-command-full-command ((command compile-queue-ssh-shell-command))
+    "Return the full shell command for COMMAND."
+  (compile-queue-shell-command--command command))
+
+(cl-defgeneric compile-queue-command--start-process (command))
+(cl-defmethod compile-queue-command--start-process ((command compile-queue-shell-command))
   (compile-queue--save-var-excursion (process-environment)
     (--each (compile-queue-shell-command--env command)
       (add-to-list 'process-environment (concat (car it) "="
@@ -730,7 +774,35 @@ Accepts initial values for the var-names as well similar to `let' bindings."
       (start-process-shell-command
        (compile-queue-shell-command-name command)
        (compile-queue-shell-command-buffer-name command)
-       (compile-queue-shell-command-command  command)))))
+       (compile-queue-shell-command-full-command  command)))))
+
+(cl-defmethod compile-queue-command--start-process ((command compile-queue-ssh-shell-command))
+  (let ((host (compile-queue-ssh-shell-command--host command)))
+    (compile-queue--save-var-excursion (process-environment)
+      
+      
+      (let* ((process-connection-type nil)
+             (temp-file (make-temp-file "compile-queue-command" nil nil))
+             (temp-file-name (f-filename temp-file))
+             (destination-file (f-join "/tmp/" temp-file-name)))
+        (chmod temp-file 0400)
+        (with-temp-buffer
+          (insert "#/bin/zsh\n")
+          (insert (concat "trap 'rm " destination-file "' ERR EXIT\n"))
+          (cl-loop for (key . value) in (compile-queue-shell-command--env command)
+                   do (insert "export " key "=" value "\n"))
+          (insert (compile-queue-shell-command-full-command command))
+          (write-region (point-min) (point-max) temp-file))
+        (let ((process-connection-type (compile-queue-shell-command--pty command)))
+          (start-process-shell-command
+           (compile-queue-shell-command-name command)
+           (compile-queue-shell-command-buffer-name command)
+           (s-join " "
+                   (list
+                    "scp" temp-file (concat host ":" destination-file)
+                    "1>/dev/null"
+                    "&&"
+                    "ssh" host "bash" destination-file))))))))
 
 (defun compile-queue-command--execute (promise queue group)
   "Execute PROMISE in a buffer related to QUEUE."
@@ -879,7 +951,7 @@ return *`compile-queue-shell-command-name'*.
 Otherwise return the command's string truncated."
   (or (compile-queue-shell-command--buffer-name command)
       (-some--> (compile-queue-shell-command--name command) (concat " *" it "*"))
-      (concat " *" (s-truncate 20 (compile-queue-shell-command-command command)) "*")))
+      (concat " *" (s-truncate 20 (compile-queue-shell-command-full-command command)) "*")))
 
 (defun compile-queue-shell-command-name (command)
   "Return the name of COMMAND.
@@ -890,7 +962,7 @@ If `compile-queue-shell-command-buffer-name' is set, return
 Otherwise return the command's string truncated."
   (or (compile-queue-shell-command--name command)
       (compile-queue-shell-command-buffer-name command)
-      (concat (s-truncate 10 (compile-queue-shell-command-command command)))))
+      (concat (s-truncate 10 (compile-queue-shell-command-full-command command)))))
 
 (defun compile-queue-shell-command--init-buffer (command)
   "Initialize the buffer COMMAND which is a `compile-queue-shell-command'.
@@ -1025,7 +1097,7 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
     (or
      (-some-> command compile-queue-command--name)
      (-some-> execution compile-queue-execution--buffer buffer-name)
-     (when (compile-queue-shell-command-p command) (-some-> command compile-queue-shell-command-command)))))
+     (when (compile-queue-shell-command-p command) (-some-> command compile-queue-shell-command-full-command)))))
 
 (defun compile-queue-mode--mode-line-command-name ()
   "Return the command name for the current execution for the mode line."
@@ -1055,7 +1127,7 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
              ((pred (compile-queue-shell-command-p))
                (or
                 (compile-queue-command--name command)
-                (-some-> command compile-queue-shell-command-command)))))
+                (-some-> command compile-queue-shell-command-full-command)))))
        it)
       (s-join ", " it)
       (concat "[" it "]"))))
