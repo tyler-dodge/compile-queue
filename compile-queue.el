@@ -788,11 +788,11 @@ Accepts initial values for the var-names as well similar to `let' bindings."
         (chmod temp-file 0400)
         (with-temp-buffer
           (insert "#/bin/zsh\n")
-          (insert (concat "trap 'rm " destination-file "' ERR EXIT\n"))
+          (insert (concat "trap 'rm " destination-file "' EXIT\n"))
           (cl-loop for (key . value) in (compile-queue-shell-command--env command)
                    do (insert "export " key "=" value "\n"))
           (insert (compile-queue-shell-command-full-command command))
-          (write-region (point-min) (point-max) temp-file))
+          (write-region (point-min) (point-max) temp-file nil t))
         (let ((process-connection-type (compile-queue-shell-command--pty command)))
           (start-process-shell-command
            (compile-queue-shell-command-name command)
