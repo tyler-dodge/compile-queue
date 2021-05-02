@@ -1026,7 +1026,9 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
 (defun compile-queue-delegate-mode--scroll-to-end-hook ()
   (--each (->>
            (cl-loop for buffer in
-                    (->> (ht-values compile-queue--name-ht) (--map (compile-queue-buffer-name it)))
+                    (->> (ht-values compile-queue--name-ht)
+                      (--map (compile-queue-buffer-name it))
+                      (--filter (get-buffer it)))
                     append
                     (with-current-buffer buffer
                       (let ((pt-max (point-max)))
@@ -1140,7 +1142,9 @@ or `compile-queue-root-queue'.
 Meant to be used as the action for `org-runbook-execute-command-action'."
   (org-runbook--validate-command command)
 
-  (let ((queue (or queue
+  (let ((queue (or (-some--> (org-runbook-command-get-property command "QUEUE")
+                     (compile-queue--by-name it))
+                   queue
                    (compile-queue-current)
                    (compile-queue--by-name compile-queue-root-queue))))
     (cl-loop
@@ -1177,25 +1181,32 @@ Meant to be used as the action for `org-runbook-execute-command-action'."
                                                         ,(org-runbook-elisp-subcommand-elisp subcommand))))
                         (with-current-buffer (compile-queue-buffer-name queue)
                           (eval (org-runbook-elisp-subcommand-elisp subcommand) t))))))))
-     finally
+     finally return
      (when commands
        (let* ((host (org-runbook-command-get-property command "HOST"))
+              (force (org-runbook-command-get-property command "FORCE"))
+              (directory (org-runbook-command-get-property command "DIRECTORY"))
               (shell-command
                (if host
                    (compile-queue-ssh-shell-command-create
                     :name (org-runbook-command-name command)
                     :pty (org-runbook-command-pty command)
                     :host host
+                    :default-directory directory
                     :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; ")))
                    (compile-queue-shell-command-create
                     :name (org-runbook-command-name command)
+                    :default-directory directory
                     :pty (org-runbook-command-pty command)
                     :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; "))))))
-         (if deferred
-             (deferred:nextc deferred
-               (lambda (&rest _) (compile-queue-schedule queue shell-command)))
-           (compile-queue-schedule queue shell-command))
-         (setq commands nil))))))
+         (prog1 (if deferred
+                    (deferred:nextc deferred
+                      (lambda (&rest _)
+                        (when force (compile-queue-clean queue))
+                        (compile-queue-schedule queue shell-command)))
+                  (when force (compile-queue-clean queue))
+                  (compile-queue-schedule queue shell-command))
+           (setq commands nil)))))))
 
 (define-minor-mode compile-queue-delegate-mode
   "Minor mode for buffers that delegate to the compile-queue."
@@ -1356,6 +1367,31 @@ Handles notifying compile queue the process STATUS on completion."
      ((compile-queue-shell-command-p command)
       (compile-queue-shell-command--restart execution))
      (t (error "Unknown command type command: %S, execution: %S." command execution)))))
+
+(defun org-babel-execute:compile-queue (body params)
+  (let* ((buffer (current-buffer))
+        (placeholder (uuid-string))
+        (replace-placeholder (lambda (replacement)
+                               (with-current-buffer buffer
+                                 (save-excursion
+                                   (goto-char (point-min))
+                                   (when (search-forward placeholder nil t)
+                                     (delete-char (- (length placeholder)))
+                                     (insert (s-replace-all '(("\n" . "\n: "))
+                                                            (s-trim replacement)))))))))
+    (deferred:$
+      (compile-queue-execute-org-runbook-command
+       (org-runbook--shell-command-for-target
+        (org-runbook-target-at-point)))
+      (deferred:error it
+        (lambda (error)
+          (funcall replace-placeholder (error-message-string error))
+          (deferred:fail (error-message-string error))))
+      (deferred:nextc it
+        (lambda (result-buffer)
+          (let ((buffer-string (with-current-buffer result-buffer (buffer-string))))
+            (funcall replace-placeholder buffer-string)))))
+    placeholder))
 
 
 (when (boundp 'evil-motion-state-modes)
