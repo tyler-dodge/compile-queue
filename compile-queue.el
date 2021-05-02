@@ -1084,6 +1084,12 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
   (setf (compile-queue--outputting-executions compile-queue)
         (list (compile-queue-execution--id (compile-queue--target-execution compile-queue)))))
 
+(defvar compile-queue-mode-map
+  (--doto (make-sparse-keymap)
+    (define-key it (kbd "RET")
+      #'compile-queue-mode-display-execution-buffer)))
+
+
 (define-derived-mode compile-queue-mode special-mode "Compile-Queue"
   "Mode for mirroring the output of the current queue's execution's compile buffer."
   :group 'compile-queue
@@ -1186,17 +1192,21 @@ Meant to be used as the action for `org-runbook-execute-command-action'."
        (let* ((host (org-runbook-command-get-property command "HOST"))
               (force (org-runbook-command-get-property command "FORCE"))
               (directory (org-runbook-command-get-property command "DIRECTORY"))
+              (major-mode (-some--> (org-runbook-command-get-property command "MAJOR-MODE")
+                            (intern it)))
               (shell-command
                (if host
                    (compile-queue-ssh-shell-command-create
                     :name (org-runbook-command-name command)
                     :pty (org-runbook-command-pty command)
                     :host host
+                    :major-mode major-mode
                     :default-directory directory
                     :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; ")))
                    (compile-queue-shell-command-create
                     :name (org-runbook-command-name command)
                     :default-directory directory
+                    :major-mode major-mode
                     :pty (org-runbook-command-pty command)
                     :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; "))))))
          (prog1 (if deferred
@@ -1396,6 +1406,11 @@ Handles notifying compile queue the process STATUS on completion."
 
 (when (boundp 'evil-motion-state-modes)
   (add-to-list 'evil-motion-state-modes 'compile-queue-mode))
+
+(defun compile-queue-mode-display-execution-buffer ()
+  "Display the execution buffer for the current compile-queue."
+  (interactive)
+  (display-buffer (compile-queue-execution-buffer (compile-queue--target-execution  (compile-queue-current)))))
 
 (provide 'compile-queue)
 ;;; compile-queue.el ends here
