@@ -1380,6 +1380,7 @@ Handles notifying compile queue the process STATUS on completion."
 
 (defun org-babel-execute:compile-queue (body params)
   (let* ((buffer (current-buffer))
+         (result-type (alist-get :result-params params))
         (placeholder (uuid-string))
         (replace-placeholder (lambda (replacement)
                                (with-current-buffer buffer
@@ -1387,8 +1388,11 @@ Handles notifying compile queue the process STATUS on completion."
                                    (goto-char (point-min))
                                    (when (search-forward placeholder nil t)
                                      (delete-char (- (length placeholder)))
-                                     (insert (s-replace-all '(("\n" . "\n: "))
-                                                            (s-trim replacement)))))))))
+                                     (insert
+                                      (if (string= (cadr result-type) "drawer")
+                                          (s-trim replacement)
+                                          (s-replace-all '(("\n" . "\n: "))
+                                                         (s-trim replacement))))))))))
     (deferred:$
       (compile-queue-execute-org-runbook-command
        (org-runbook--shell-command-for-target
