@@ -1033,6 +1033,7 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
                     (with-current-buffer buffer
                       (let ((pt-max (point-max)))
                         (->> (get-buffer-window-list buffer nil t)
+                          (--filter (eq (window-point it) pt-max))
                              (--map 
                               (with-selected-frame (window-frame it)
                                 (let* ((window-start (save-excursion
