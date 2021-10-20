@@ -131,6 +131,9 @@ Set to nil to disable garbage collection."
   "When non-nil, disable the current execution's matcher.
 Set automatically if the matcher throws an error.")
 
+(defvar-local compile-queue-mode--scroll-to-end nil
+  "Temporary variable that caches whether or not the compile-queue-mode should tail.")
+
 (compile-queue-defstruct compile-queue
   "Use `compile-queue-current' to get an instance of this type."
   (id (uuid-string))
@@ -1009,8 +1012,8 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
 
       (with-current-buffer (compile-queue-buffer-name compile-queue-delegate-mode--queue)
         (let* ((compile-queue-end-pt (point-max))
-              (scroll-to-end (->> (get-buffer-window-list (current-buffer) nil t)
-                                  (--filter (eq (window-point it) compile-queue-end-pt)))))
+               (scroll-to-end (->> (get-buffer-window-list (current-buffer) nil t)
+                                   (--filter (>= (window-point it) compile-queue-end-pt)))))
           (save-excursion
             (let ((inhibit-read-only t))
               (goto-char beg)
@@ -1019,39 +1022,26 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
               (when (> removed-lines 0)
                 (goto-char (point-min))
                 (delete-region (point-min) (save-excursion (forward-line removed-lines) (point))))))
-          (--each scroll-to-end (set-window-point it (point-max)))))
-      (compile-queue-delegate-mode--scroll-to-end-hook))))
+          (when scroll-to-end (compile-queue-delegate-mode--scroll-to-end-hook scroll-to-end)))))))
 
-(add-hook 'window-state-change-hook #'compile-queue-delegate-mode--scroll-to-end-hook)
-(defun compile-queue-delegate-mode--scroll-to-end-hook ()
-  (--each (->>
-           (cl-loop for buffer in
-                    (->> (ht-values compile-queue--name-ht)
-                      (--map (compile-queue-buffer-name it))
-                      (--filter (get-buffer it)))
-                    append
-                    (with-current-buffer buffer
-                      (let ((pt-max (point-max)))
-                        (->> (get-buffer-window-list buffer nil t)
-                          (--filter (eq (window-point it) pt-max))
-                             (--map 
-                              (with-selected-frame (window-frame it)
-                                (let* ((window-start (save-excursion
-                                                       (goto-char (point-max))
-                                                       (when (ignore-errors
-                                                               (line-move-visual
-                                                                (ceiling (- (- (window-height it 'floor) 4))))
-                                                               t)
-                                                         (point)))))
-                                  (when window-start
-                                    (cons it (compile-queue--tail-end-window-state it pt-max window-start))))))
-                             (-non-nil))))))
-    (when it
-      (with-selected-frame (window-frame (car it))
-        (window-state-put (cdr it) (car it))))))
+(defun compile-queue-delegate-mode--scroll-to-end-hook (scroll-to-end)
+  (--each scroll-to-end (compile-queue--scroll-to-end it)))
+
+(defun compile-queue--scroll-to-end (window)
+  (with-selected-frame (window-frame window)
+    (let* ((window-start
+            (with-current-buffer (window-buffer window)
+              (save-excursion
+                (goto-char (point-max))
+                (setq temporary-goal-column (current-column)) ; Prevents errors in line-move-visual
+                (line-move-visual (ceiling (- (- (window-height window 'floor) 4))) t)
+                (point))))
+           (pt-max (with-current-buffer (window-buffer window) (point-max))))
+      (when window-start
+        (window-state-put (compile-queue--tail-end-window-state window pt-max window-start) window)))))
 
 (defun compile-queue--tail-end-window-state (window new-pt new-start)
-  (-let [(window-state &as &alist 'buffer (buffer-list &as &alist 'start start)) (window-state-get window t)]
+   (-let [(window-state &as &alist 'buffer (buffer-list &as &alist 'start start)) (window-state-get window t)]
     (setf (alist-get 'start buffer-list) new-start)
     (setf (alist-get 'point buffer-list) new-pt)
     window-state))
