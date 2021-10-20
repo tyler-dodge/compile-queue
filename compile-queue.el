@@ -275,6 +275,7 @@ Groups are mainly used for managing commands that do not make sense to run in is
 :command The shell command as an already escaped string
 :env A cons list of environment variables like ((\"KEY2\" . \"VALUE2\") (\"KEY2\" . \"VALUE2\"))
 :major-mode The major mode to use for the buffer that handles the output from the shell command
+:vars Lisp Variables to set after the major mode in the buffer that handles the output from the shell command
 :default-directory The default-directory to use when executing the shell command
 :buffer-name The name of the buffer that will handle the output from the shell command.
 :pty t if this requires a pty
@@ -282,6 +283,7 @@ If nil, it defaults to a truncated version of the command."
   command
   env
   major-mode
+  vars
   default-directory
   buffer-name
   pty)
@@ -988,6 +990,9 @@ Replaces the buffer if it already exists."
        (or (compile-queue-shell-command--major-mode command)
            compile-queue-shell-default-major-mode))
 
+      (--each (compile-queue-shell-command--vars command)
+        (set (car it) (eval (cdr it))))
+
       (compile-queue-delegate-mode 1)
 
       (prog1 (get-buffer buffer-name)
@@ -1185,6 +1190,9 @@ Meant to be used as the action for `org-runbook-execute-command-action'."
               (directory (org-runbook-command-get-property command "DIRECTORY"))
               (major-mode (-some--> (org-runbook-command-get-property command "MAJOR-MODE")
                             (intern it)))
+              (vars (-some->> (org-runbook-command-get-property command "VARS")
+                      (read)
+                      (--map (cons (car it) (cdr it)))))
               (shell-command
                (if host
                    (compile-queue-ssh-shell-command-create
@@ -1193,11 +1201,13 @@ Meant to be used as the action for `org-runbook-execute-command-action'."
                     :host host
                     :major-mode major-mode
                     :default-directory directory
+                    :vars vars
                     :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; ")))
                    (compile-queue-shell-command-create
                     :name (org-runbook-command-name command)
                     :default-directory directory
                     :major-mode major-mode
+                    :vars vars
                     :pty (org-runbook-command-pty command)
                     :command (->> commands (reverse) (-non-nil) (-map #'s-trim) (s-join "; "))))))
          (prog1 (if deferred
