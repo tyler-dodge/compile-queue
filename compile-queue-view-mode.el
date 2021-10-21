@@ -17,6 +17,7 @@
   :group 'compile-queue
   (when compile-queue-view-mode-line-format
     (setq-local mode-line-format compile-queue-view-mode-line-format))
+  (buffer-disable-undo)
   (setq-local buffer-read-only t))
 
 (defun compile-queue-view-mode--mode-line-scheduled ()

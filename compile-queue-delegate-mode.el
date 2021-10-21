@@ -27,6 +27,7 @@ Set automatically if the matcher throws an error.")
   :lighter " compile-queue-delegate"
   (if compile-queue-delegate-mode
       (progn
+        (buffer-disable-undo)
         (unless (memq 'compile-queue-delegate-mode--forward-change after-change-functions)
           (setq-local after-change-functions
                       (append (-some->> after-change-functions (-drop-last 1)) '(compile-queue-delegate-mode--forward-change t)))))
@@ -64,7 +65,7 @@ Set automatically if the matcher throws an error.")
 
 (defun compile-queue-delegate-mode--process-filter (process output)
   "Process filter that delegates OUTPUT to the original PROCESS filter.
-Also, manages scolling windows to the end if the point
+Also, manages scolling windows to the end if the int
 is currently set at `point-max'."
   (let* ((process-buffer (process-buffer process))
          (queue (compile-queue-current process))
