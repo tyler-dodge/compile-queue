@@ -30,8 +30,11 @@ Set automatically if the matcher throws an error.")
         (buffer-disable-undo)
         (unless (memq 'compile-queue-delegate-mode--forward-change after-change-functions)
           (setq-local after-change-functions
-                      (append (-some->> after-change-functions (-drop-last 1)) '(compile-queue-delegate-mode--forward-change t)))))
-    (setq-local after-change-functions (--filter (not (equal it #'compile-queue-delegate-mode--forward-change)) after-change-functions))))
+                      (append (-some->> after-change-functions (-drop-last 1))
+                              '(compile-queue-delegate-mode--forward-change t)))))
+    (setq-local after-change-functions
+                (--filter (not (equal it #'compile-queue-delegate-mode--forward-change))
+                          after-change-functions))))
 
 (defun compile-queue-delegate-mode--scroll-to-end (window)
   (with-selected-frame (window-frame window)
@@ -44,7 +47,9 @@ Set automatically if the matcher throws an error.")
                 (point))))
            (pt-max (with-current-buffer (window-buffer window) (point-max))))
       (when window-start
-        (window-state-put (compile-queue-delegate-mode--tail-end-window-state window pt-max window-start) window)))))
+        (window-state-put
+         (compile-queue-delegate-mode--tail-end-window-state window pt-max window-start)
+         window)))))
 
 (defun compile-queue-delegate-mode--tail-end-window-state (window new-pt new-start)
    (-let [(window-state &as &alist 'buffer (buffer-list &as &alist 'start start)) (window-state-get window t)]

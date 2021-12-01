@@ -7,6 +7,8 @@
 (declare-function org-runbook-command-name "ext:org-runbook.el" (command))
 (declare-function org-runbook-elisp-subcommand-elisp "ext:org-runbook.el" (command))
 
+(add-to-list 'org-src-lang-modes `("compile-queue" . sh))
+
 (defun compile-queue-execute-org-runbook-command (command &optional queue)
   "Schedule the `org-runbook-command' COMMAND.
 The queue it is scheduled on will be either QUEUE, `compile-queue-current'
