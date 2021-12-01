@@ -46,7 +46,7 @@ Set automatically if the matcher throws an error.")
                 (line-move-visual (ceiling (- (- (window-height window 'floor) 4))) t)
                 (point))))
            (pt-max (with-current-buffer (window-buffer window) (point-max))))
-      (when window-start
+      (when (and window-start (> window-start 0))
         (window-state-put
          (compile-queue-delegate-mode--tail-end-window-state window pt-max window-start)
          window)))))
