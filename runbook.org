@@ -14,7 +14,7 @@
   set -o pipefail
   set -o nounset
   cd {{project_root}}
-  nix-build nix/emacs-26.2.nix --run '${emacs}/bin/emacs --batch -q -L . -l $compile_queue -l ert-runner'
+  nix-build nix/emacs-26.2.nix
 
 #+END_SRC
 
@@ -34,7 +34,7 @@
   set -o pipefail
   set -o nounset
   cd {{project_root}}
-  nix-build nix/emacs-26.3.nix --run '${emacs}/bin/emacs --batch -q -L . -l $compile_queue -l ert-runner'
+  nix-build nix/emacs-26.3.nix
 
 #+END_SRC
 
@@ -55,7 +55,7 @@
   set -o pipefail
   set -o nounset
   cd {{project_root}}
-  nix-build nix/emacs-27.1.nix --run '${emacs}/bin/emacs --batch -q -L . -l $compile_queue -l ert-runner'
+  nix-build nix/emacs-27.1.nix
 
 #+END_SRC
 
@@ -76,7 +76,7 @@
   set -o pipefail
   set -o nounset
   cd {{project_root}}
-  nix-build nix/emacs-27.2.nix --run '${emacs}/bin/emacs --batch -q -L . -l $compile_queue -l ert-runner'
+  nix-build nix/emacs-27.2.nix
 
 #+END_SRC
 
