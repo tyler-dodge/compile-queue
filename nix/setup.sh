@@ -19,8 +19,13 @@ function buildPhase() {
     ln -s $ert_config .ert-runner
 
     ${emacs}/bin/emacs -q -version
-    ${emacs}/bin/emacs -q -batch -L . -l compile-queue.el -l ert-runner
-    mkdir $out
+    ${emacs}/bin/emacs -q -batch -L . -l compile-queue.el -l ert-runner | tee $out
+    STATUS="${PIPESTATUS[0]}"
+    if [ $STATUS -gt 0 ]
+    then
+        rm $out
+        exit $STATUS
+    fi
 }
 
 function genericBuild() {
