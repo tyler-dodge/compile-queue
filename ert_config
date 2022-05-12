@@ -1,2 +1,3 @@
 -l test/compile-queue-test.el
+-l test/compile-queue-dsl-test.el
 --reporter dot

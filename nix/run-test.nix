@@ -29,7 +29,9 @@ in derivation rec {
   compile_queue_delegate_mode = ../compile-queue-delegate-mode.el;
   compile_queue_org = ../compile-queue-org.el;
   compile_queue_shell_command = ../compile-queue-shell-command.el;
-  test_target = ../test/compile-queue-test.el;
+  compile_queue_test = ../test/compile-queue-test.el;
+  compile_queue_dsl_test = ../test/compile-queue-dsl-test.el;
+  ert_config = ../ert_config;
   system = builtins.currentSystem;
 }
 
