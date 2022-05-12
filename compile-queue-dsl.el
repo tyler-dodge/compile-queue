@@ -371,4 +371,4 @@ where SUBPLIST is the valid prefix plist of PLIST and REST is the remainder of t
                   output-plist)))))
     (cons output-plist command-rest)))
 
-(provide-me)
+(provide 'compile-queue-dsl)

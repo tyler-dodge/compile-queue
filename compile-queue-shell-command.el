@@ -164,4 +164,4 @@ Replaces the buffer if it already exists."
                 (set-process-filter it #'compile-queue-delegate-mode--process-filter)))
             (compile-queue-view-mode--update-buffer queue)))))))
 
-(provide-me)
+(provide 'compile-queue-shell-command)

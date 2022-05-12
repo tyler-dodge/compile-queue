@@ -18,9 +18,17 @@ in derivation rec {
   args = [ ./builder.sh ];
   setup = ./setup.sh;
   buildInputs = [
-    versioned_emacs pkgs.coreutils];
+    versioned_emacs pkgs.coreutils pkgs.glibcLocales];
   emacs = versioned_emacs;
+  locales = pkgs.glibcLocales;
   compile_queue = ../compile-queue.el;
+  compile_queue_utils = ../compile-queue-utils.el;
+  compile_queue_structs = ../compile-queue-structs.el;
+  compile_queue_dsl = ../compile-queue-dsl.el;
+  compile_queue_view_mode = ../compile-queue-view-mode.el;
+  compile_queue_delegate_mode = ../compile-queue-delegate-mode.el;
+  compile_queue_org = ../compile-queue-org.el;
+  compile_queue_shell_command = ../compile-queue-shell-command.el;
   test_target = ../test/compile-queue-test.el;
   system = builtins.currentSystem;
 }

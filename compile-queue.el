@@ -38,7 +38,7 @@
 (require 'uuid)
 (require 'compile-queue-utils "compile-queue-utils.el")
 (require 'compile-queue-structs "compile-queue-structs.el")
-(require 'compile-queue-$ "compile-queue-$.el")
+(require 'compile-queue-dsl "compile-queue-dsl.el")
 (require 'compile-queue-view-mode "compile-queue-view-mode.el")
 (require 'compile-queue-delegate-mode "compile-queue-delegate-mode.el")
 (require 'compile-queue-org "compile-queue-org.el")
