@@ -37,25 +37,26 @@ Set automatically if the matcher throws an error.")
                           after-change-functions))))
 
 (defun compile-queue-delegate-mode--scroll-to-end (window)
-  (with-selected-frame (window-frame window)
-    (let* ((window-start
-            (with-current-buffer (window-buffer window)
-              (save-excursion
-                (goto-char (point-max))
-                (setq temporary-goal-column (current-column)) ; Prevents errors in line-move-visual
-                (line-move-visual (ceiling (- (- (window-height window 'floor) 4))) t)
-                (point))))
-           (pt-max (with-current-buffer (window-buffer window) (point-max))))
-      (when (and window-start (> window-start 0))
-        (window-state-put
-         (compile-queue-delegate-mode--tail-end-window-state window pt-max window-start)
-         window)))))
+  (unless (eq (window-point window) (with-current-buffer (window-buffer window) (point-max)))
+    (with-selected-frame (window-frame window)
+      (let* ((window-start
+              (with-current-buffer (window-buffer window)
+                (save-excursion
+                  (goto-char (point-max))
+                  (setq temporary-goal-column (current-column)) ; Prevents errors in line-move-visual
+                  (line-move-visual (ceiling (- (- (window-height window 'floor) 4))) t)
+                  (point))))
+             (pt-max (with-current-buffer (window-buffer window) (point-max))))
+        (when (and window-start (> window-start 0))
+          (when-let (new-state (compile-queue-delegate-mode--tail-end-window-state window pt-max window-start))
+            (window-state-put new-state window)))))))
 
 (defun compile-queue-delegate-mode--tail-end-window-state (window new-pt new-start)
-   (-let [(window-state &as &alist 'buffer (buffer-list &as &alist 'start start)) (window-state-get window t)]
-    (setf (alist-get 'start buffer-list) new-start)
-    (setf (alist-get 'point buffer-list) new-pt)
-    window-state))
+  (unless (and (eq (window-start window) new-start) (eq (window-point window) new-pt))
+    (-let [(window-state &as &alist 'buffer (buffer-list &as &alist 'start start)) (window-state-get window t)]
+      (setf (alist-get 'start buffer-list) new-start)
+      (setf (alist-get 'point buffer-list) new-pt)
+      window-state)))
 
 (defun compile-queue-delegate-mode--status-code-for-process (process status)
   "Return the STATUS from PROCESS as a status code."
@@ -87,24 +88,25 @@ is currently set at `point-max'."
                           compile-queue-command--matcher)))
       (let ((inhibit-redisplay t))
         (with-current-buffer process-buffer
-          (goto-char start)
-          (when (and (not compile-queue-delegate-mode--matcher-disabled)
-                     (condition-case error
-                         (if (functionp matcher)
-                             (funcall matcher output)
-                           output)
-                       (error
-                        (setq-local compile-queue-delegate-mode--matcher-disabled t)
-                        (error "%s" (error-message-string error)))
-                       (user-error
-                        (setq-local compile-queue-delegate-mode--matcher-disabled t)
-                        (error "%s" (error-message-string error)))))
-            (deferred:callback
-              (-> execution
-                  compile-queue-execution--promise
-                  compile-queue-promise--deferred)
-              (-> execution compile-queue-execution--buffer))
-            (compile-queue-execute queue)))))))
+          (save-mark-and-excursion
+            (goto-char start)
+            (when (and (not compile-queue-delegate-mode--matcher-disabled)
+                       (condition-case error
+                           (if (functionp matcher)
+                               (funcall matcher output)
+                             output)
+                         (error
+                          (setq-local compile-queue-delegate-mode--matcher-disabled t)
+                          (error "%s" (error-message-string error)))
+                         (user-error
+                          (setq-local compile-queue-delegate-mode--matcher-disabled t)
+                          (error "%s" (error-message-string error)))))
+              (deferred:callback
+               (-> execution
+                   compile-queue-execution--promise
+                   compile-queue-promise--deferred)
+               (-> execution compile-queue-execution--buffer))
+              (compile-queue-execute queue))))))))
 
 (defun compile-queue-delegate-mode--process-sentinel (process status)
   "Delegating sentinel for compile-queue.
