@@ -85,6 +85,9 @@ Set to nil to disable garbage collection."
   :safe t
   :group 'compile-queue)
 
+(defvar compile-queue--echo-output nil
+  "Used for batch output.")
+
 (defvar compile-queue--name-ht (ht)
   "Hash table from compile-queue name to the corresponding compile-queue struct.")
 
@@ -146,6 +149,14 @@ Kills the current execution."
     (setf (compile-queue--scheduled queue) nil))
   (force-mode-line-update t)
   t)
+
+(defun compile-queue-accept-process-output (compile-queue)
+  "Waits until the compile queue is finished."
+  (let ((compile-queue--echo-output t))
+    (while (compile-queue--target-execution 
+            (compile-queue-current compile-queue))
+      (accept-process-output nil 1 nil nil)
+      (redisplay t))))
 
 (defun compile-queue--by-name (name)
   "Find or create and register the queue with NAME.

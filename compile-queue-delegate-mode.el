@@ -41,7 +41,7 @@ Set automatically if the matcher throws an error.")
     (with-selected-frame (window-frame window)
       (let* ((window-start
               (with-current-buffer (window-buffer window)
-                (save-excursion
+                (save-mark-and-excursion
                   (goto-char (point-max))
                   (setq temporary-goal-column (current-column)) ; Prevents errors in line-move-visual
                   (line-move-visual (ceiling (- (- (window-height window 'floor) 4))) t)
@@ -73,6 +73,8 @@ Set automatically if the matcher throws an error.")
   "Process filter that delegates OUTPUT to the original PROCESS filter.
 Also, manages scolling windows to the end if the int
 is currently set at `point-max'."
+  (when compile-queue--echo-output
+    (message "%s" output))
   (let* ((process-buffer (process-buffer process))
          (queue (compile-queue-current process))
          (delegate
@@ -80,33 +82,34 @@ is currently set at `point-max'."
             (buffer-local-value 'compile-queue-delegate-mode--process-filter-delegate)))
          (execution (buffer-local-value 'compile-queue-delegate-mode--execution process-buffer))
          (start (marker-position (process-mark process))))
-    (-some--> delegate (progn
-                         (funcall it process output)))
-    (when-let ((matcher (-some-> execution
-                          compile-queue-execution--promise
-                          compile-queue-promise--command
-                          compile-queue-command--matcher)))
-      (let ((inhibit-redisplay t))
-        (with-current-buffer process-buffer
-          (save-mark-and-excursion
-            (goto-char start)
-            (when (and (not compile-queue-delegate-mode--matcher-disabled)
-                       (condition-case error
-                           (if (functionp matcher)
-                               (funcall matcher output)
-                             output)
-                         (error
-                          (setq-local compile-queue-delegate-mode--matcher-disabled t)
-                          (error "%s" (error-message-string error)))
-                         (user-error
-                          (setq-local compile-queue-delegate-mode--matcher-disabled t)
-                          (error "%s" (error-message-string error)))))
-              (deferred:callback
-               (-> execution
-                   compile-queue-execution--promise
-                   compile-queue-promise--deferred)
-               (-> execution compile-queue-execution--buffer))
-              (compile-queue-execute queue))))))))
+    (with-current-buffer process-buffer
+      (-some--> delegate (progn
+                           (funcall it process output)))
+      (when-let ((matcher (-some-> execution
+                            compile-queue-execution--promise
+                            compile-queue-promise--command
+                            compile-queue-command--matcher)))
+        (let ((inhibit-redisplay t))
+          (with-current-buffer process-buffer
+            (save-mark-and-excursion
+              (goto-char start)
+              (when (and (not compile-queue-delegate-mode--matcher-disabled)
+                         (condition-case error
+                             (if (functionp matcher)
+                                 (funcall matcher output)
+                               output)
+                           (error
+                            (setq-local compile-queue-delegate-mode--matcher-disabled t)
+                            (error "%s" (error-message-string error)))
+                           (user-error
+                            (setq-local compile-queue-delegate-mode--matcher-disabled t)
+                            (error "%s" (error-message-string error)))))
+                (deferred:callback
+                  (-> execution
+                      compile-queue-execution--promise
+                      compile-queue-promise--deferred)
+                  (-> execution compile-queue-execution--buffer))
+                (compile-queue-execute queue)))))))))
 
 (defun compile-queue-delegate-mode--process-sentinel (process status)
   "Delegating sentinel for compile-queue.
@@ -126,51 +129,55 @@ Handles notifying compile queue the process STATUS on completion."
         (compile-queue--save-var-excursion ((inhibit-read-only t))
           (-some--> delegate (funcall it process status))))
 
-      (unless (process-live-p process)
-        (let* ((execution (-some--> (buffer-local-value 'compile-queue-delegate-mode--execution buffer)
-                            (when (eq (compile-queue-execution--process it) process) it)))
-               (command (-some-> execution compile-queue-execution--promise compile-queue-promise--command))
-               (status-code (compile-queue-delegate-mode--status-code-for-process process status))
-               (queue (-some-> (compile-queue-current process)))
-               (is-target (when execution
-                            (compile-queue-execution-eq-id
-                             execution
-                             (-some-> queue compile-queue--target-execution))))
-               (non-zero-exit (not (eq status-code 0))))
-          (when execution (setf (compile-queue-execution--status-code execution) status-code))
-          (when is-target
-            (when (compile-queue-execution-p (compile-queue--target-execution queue))
-              (setf (compile-queue--target-execution queue)
-                    (-some--> queue
-                      (compile-queue--target-execution it)
-                      (compile-queue-execution--group-execution it))))
-            
-            (when non-zero-exit (compile-queue-clean queue)))
-          (-some->> command
-            (compile-queue-item-after-complete)
-            (funcall (compile-queue--callback execution)))
+      ;; deferring so that this is run after the event loop that handles forwarding changes
+      (run-at-time
+       nil nil
+       (lambda ()
+         (unless (process-live-p process)
+           (let* ((execution (-some--> (buffer-local-value 'compile-queue-delegate-mode--execution buffer)
+                               (when (eq (compile-queue-execution--process it) process) it)))
+                  (command (-some-> execution compile-queue-execution--promise compile-queue-promise--command))
+                  (status-code (compile-queue-delegate-mode--status-code-for-process process status))
+                  (queue (-some-> (compile-queue-current process)))
+                  (is-target (when execution
+                               (compile-queue-execution-eq-id
+                                execution
+                                (-some-> queue compile-queue--target-execution))))
+                  (non-zero-exit (not (eq status-code 0))))
+             (when execution (setf (compile-queue-execution--status-code execution) status-code))
+             (when is-target
+               (when (compile-queue-execution-p (compile-queue--target-execution queue))
+                 (setf (compile-queue--target-execution queue)
+                       (-some--> queue
+                         (compile-queue--target-execution it)
+                         (compile-queue-execution--group-execution it))))
+               
+               (when non-zero-exit (compile-queue-clean queue)))
+             (-some->> command
+               (compile-queue-item-after-complete)
+               (funcall (compile-queue--callback execution)))
 
-          (when is-target
-            (progn
-              (if non-zero-exit
-                  (-some--> execution
-                    (compile-queue-execution--promise it)
-                    (compile-queue-promise--deferred it)
-                    (unless (deferred:status it) (deferred:errorback it (string-trim status))))
-                (-some--> execution
-                  (compile-queue-execution--promise it)
-                  (compile-queue-promise--deferred it)
-                  (deferred:callback it (-some-> execution compile-queue-execution--buffer))))
-              (unless (and (-some-> command compile-queue-command--keep-buffer))
-                (let ((buffer (compile-queue-execution--buffer execution)))
-                  (when (and (buffer-live-p buffer) compile-queue-garbage-collect-time)
-                    (with-current-buffer buffer
+             (when is-target
+               (progn
+                 (if non-zero-exit
+                     (-some--> execution
+                       (compile-queue-execution--promise it)
+                       (compile-queue-promise--deferred it)
+                       (unless (deferred:status it) (deferred:errorback it (string-trim status))))
+                   (-some--> execution
+                     (compile-queue-execution--promise it)
+                     (compile-queue-promise--deferred it)
+                     (deferred:callback it (-some-> execution compile-queue-execution--buffer))))
+                 (unless (and (-some-> command compile-queue-command--keep-buffer))
+                   (let ((buffer (compile-queue-execution--buffer execution)))
+                     (when (and (buffer-live-p buffer) compile-queue-garbage-collect-time)
+                       (with-current-buffer buffer
 
-                      (setq-local
-                       compile-queue-delegate-mode--gc-timer
-                       (run-at-time compile-queue-garbage-collect-time nil
-                                    (lambda () (compile-queue-delegate-mode--gc-callback execution))))))))
-              (unless non-zero-exit (compile-queue-execute queue)))))))))
+                         (setq-local
+                          compile-queue-delegate-mode--gc-timer
+                          (run-at-time compile-queue-garbage-collect-time nil
+                                       (lambda () (compile-queue-delegate-mode--gc-callback execution))))))))
+                 (unless non-zero-exit (compile-queue-execute queue)))))))))))
 
 (defun compile-queue-delegate-mode--gc-callback (execution)
   "Kill the buffer for EXECUTION if the buffer is still the same execution."
@@ -192,7 +199,7 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
           (removed-lines (or (and compile-queue-max-buffer-line-limit (- (line-number-at-pos (point-max)) compile-queue-max-buffer-line-limit))
                              0)))
       (when (> removed-lines 0)
-        (save-excursion
+        (save-mark-and-excursion
           (let ((inhibit-read-only t))
             (goto-char (point-min))
             (delete-region (point-min) (save-excursion (forward-line removed-lines) (point))))))
@@ -201,14 +208,15 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
         (let* ((compile-queue-end-pt (point-max))
                (scroll-to-end (->> (get-buffer-window-list (current-buffer) nil t)
                                    (--filter (>= (window-point it) compile-queue-end-pt)))))
-          (save-excursion
+          (save-mark-and-excursion
             (let ((inhibit-read-only t))
-              (goto-char beg)
-              (delete-char length)
-              (insert text)
-              (when (> removed-lines 0)
-                (goto-char (point-min))
-                (delete-region (point-min) (save-excursion (forward-line removed-lines) (point))))))
+              (ignore-errors ;; Generally better to not lose than handler in case the buffer has been modified in an unexpected way.
+                  (progn
+                    (goto-char beg)
+                    (delete-char length)
+                    (insert text)))
+              ))
+          nil
           (when scroll-to-end (--each scroll-to-end (compile-queue-delegate-mode--scroll-to-end it))))))))
 
 (provide 'compile-queue-delegate-mode)

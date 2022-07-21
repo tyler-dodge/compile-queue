@@ -90,7 +90,7 @@ Replaces the buffer if it already exists."
       (add-to-list 'process-environment (concat (car it) "="
                                                 (cdr it))))
     (let ((process-connection-type (compile-queue-shell-command--pty command)))
-      (start-process-shell-command
+      (start-file-process-shell-command
        (compile-queue-shell-command-name command)
        (compile-queue-shell-command-buffer-name command)
        (compile-queue-shell-command-full-command  command)))))
@@ -113,7 +113,7 @@ Replaces the buffer if it already exists."
           (insert (compile-queue-shell-command-full-command command))
           (write-region (point-min) (point-max) temp-file nil t))
         (let ((process-connection-type (compile-queue-shell-command--pty command)))
-          (start-process-shell-command
+          (start-file-process-shell-command
            (compile-queue-shell-command-name command)
            (compile-queue-shell-command-buffer-name command)
            (s-join " "
