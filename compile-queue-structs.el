@@ -18,6 +18,7 @@ See `cl-defstruct'"
   (id (uuid-string))
   name
   buffer-name
+  status
   target-execution
   scheduled
   outputting-executions)

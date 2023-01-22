@@ -144,6 +144,7 @@ Handles notifying compile queue the process STATUS on completion."
                                 execution
                                 (-some-> queue compile-queue--target-execution))))
                   (non-zero-exit (not (eq status-code 0))))
+             (compile-queue-update-status queue (if non-zero-exit 'error 'success))
              (when execution (setf (compile-queue-execution--status-code execution) status-code))
              (when is-target
                (when (compile-queue-execution-p (compile-queue--target-execution queue))
@@ -204,20 +205,25 @@ from the execution-buffer in the compile-queue-delegate-mode--queue buffer."
             (goto-char (point-min))
             (delete-region (point-min) (save-excursion (forward-line removed-lines) (point))))))
 
-      (with-current-buffer (compile-queue-buffer-name compile-queue-delegate-mode--queue)
-        (let* ((compile-queue-end-pt (point-max))
-               (scroll-to-end (->> (get-buffer-window-list (current-buffer) nil t)
-                                   (--filter (>= (window-point it) compile-queue-end-pt)))))
-          (save-mark-and-excursion
-            (let ((inhibit-read-only t))
-              (ignore-errors ;; Generally better to not lose than handler in case the buffer has been modified in an unexpected way.
-                  (progn
-                    (goto-char beg)
-                    (delete-char length)
-                    (insert text)))
-              ))
-          nil
-          (when scroll-to-end (--each scroll-to-end (compile-queue-delegate-mode--scroll-to-end it))))))))
+      (let ((queue-buffer (compile-queue-buffer-name compile-queue-delegate-mode--queue)))
+        ;; This needs to be deferred from the after-change hook because an input loop can happen if this is inline
+        (run-at-time nil nil
+                     (lambda ()
+                       (with-current-buffer queue-buffer
+                         (let* ((compile-queue-end-pt (point-max))
+                                (scroll-to-end (->> (get-buffer-window-list (current-buffer) nil t)
+                                                    (--filter (>= (window-point it) compile-queue-end-pt)))))
+                           (save-mark-and-excursion
+                             (let ((inhibit-read-only t))
+                               (goto-char beg)
+                               (delete-char length)
+                               (insert text)
+                               (when (> removed-lines 0)
+                                 (-message removed-lines)
+                                 (goto-char (point-min))
+                                 (delete-region (point-min) (save-excursion (forward-line removed-lines) (point))))))
+                           nil
+                           (when scroll-to-end (--each scroll-to-end (compile-queue-delegate-mode--scroll-to-end it)))))))))))
 
 (provide 'compile-queue-delegate-mode)
 ;;; compile-queue-delegate-mode.el ends here

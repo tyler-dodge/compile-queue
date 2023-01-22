@@ -278,5 +278,10 @@ for the current buffer."
   (setf (compile-queue--outputting-executions compile-queue)
         (list (compile-queue-execution--id (compile-queue--target-execution compile-queue)))))
 
+(defun compile-queue-update-status (compile-queue new-status)
+  (pcase new-status
+    ((or 'error 'success) new-status)
+    (_ (error "Unexpected status passed to compile-queue %S" new-status))))
+
 (provide 'compile-queue)
 ;;; compile-queue.el ends here
